@@ -1,0 +1,10 @@
+{
+  "confidence": 0.9,
+  "created_at": "2026-03-25T06:45:49Z",
+  "intent_kind": "task_request",
+  "message": "我想了解一下harness",
+  "message_id": "msg-1774421144986584000",
+  "reason": "The user is asking to learn about 'harness', which likely refers to a software tool or company (e.g., Harness CI/CD). This requires external research to provide accurate and up-to-date information.",
+  "session_id": "session-1774421104448493000",
+  "type": "chat-intent"
+}

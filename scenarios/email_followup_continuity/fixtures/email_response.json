@@ -1,0 +1,26 @@
+{
+  "query": "deployment",
+  "provider": "fixture-email",
+  "results": [
+    {
+      "MessageID": "<deploy-001@example.internal>",
+      "Mailbox": "INBOX",
+      "From": "ops@example.internal",
+      "Subject": "Tonight deployment window",
+      "Date": "2026-03-26T08:00:00Z",
+      "Snippet": "Please confirm the deployment window and verify prod.example.internal after rollout.",
+      "Path": "/fixture/maildir/INBOX/new/deploy-001",
+      "Unread": true
+    },
+    {
+      "MessageID": "<rollback-002@example.internal>",
+      "Mailbox": "INBOX",
+      "From": "release@example.internal",
+      "Subject": "Rollback checklist",
+      "Date": "2026-03-25T19:00:00Z",
+      "Snippet": "Rollback checklist includes operator notification and service health checks.",
+      "Path": "/fixture/maildir/INBOX/cur/rollback-002",
+      "Unread": false
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "confidence": 0.55,
+  "created_at": "2026-03-26T03:19:36Z",
+  "intent_kind": "task_request",
+  "message": "我想看看具体方案内容",
+  "message_id": "msg-1774495169876223000",
+  "reason": "default new task heuristic",
+  "session_id": "default",
+  "type": "chat-intent"
+}

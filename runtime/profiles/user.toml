@@ -1,0 +1,7 @@
+name = "user"
+description = "Default non-privileged execution profile."
+requires_approval = false
+allow_network = true
+allow_destructive = false
+allowed_path_roots = ["/workspace", "/tmp"]
+allowed_commands = ["sh", "bash", "zsh", "python3", "git", "rg", "ls", "cat", "sed"]

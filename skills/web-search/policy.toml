@@ -1,0 +1,4 @@
+name = "web-search"
+risk_level = "low"
+requires_approval = false
+network_access = true

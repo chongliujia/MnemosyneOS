@@ -1,0 +1,10 @@
+user_id = "default-user"
+display_name = "Mnemosyne User"
+execution_profile = "user"
+workspace_roots = ["/workspace"]
+active_goals = []
+memory_mounts = ["runtime/memory"]
+
+[preferences]
+editing_style = "safe"
+verbosity = "concise"

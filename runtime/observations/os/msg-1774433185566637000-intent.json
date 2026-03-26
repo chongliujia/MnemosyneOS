@@ -1,0 +1,10 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-03-25T10:06:29Z",
+  "intent_kind": "task_request",
+  "message": "我想了解Agent的架构设计，我想构建一个多Agent",
+  "message_id": "msg-1774433185566637000",
+  "reason": "用户明确请求了解Agent架构设计并构建多Agent系统，这需要外部知识或资源来提供相关信息，适合使用web-search技能进行研究和获取资料。",
+  "session_id": "session-1774433144750635000",
+  "type": "chat-intent"
+}

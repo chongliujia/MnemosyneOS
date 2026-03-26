@@ -1,0 +1,50 @@
+{
+  "name": "email_followup_continuity",
+  "description": "Ensure an email inbox task can be continued in chat without drifting away from the prior thread.",
+  "tags": ["chat", "email", "memory", "connector"],
+  "fixtures": {
+    "email_response_file": "fixtures/email_response.json"
+  },
+  "steps": [
+    {
+      "id": "ask_email",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "帮我检查一下邮箱里和 deployment 相关的邮件"
+    },
+    {
+      "id": "followup_email",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "继续总结重点"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "selected_skill",
+      "step": "ask_email",
+      "equals": "email-inbox"
+    },
+    {
+      "type": "task_state",
+      "step": "ask_email",
+      "equals": "done"
+    },
+    {
+      "type": "assistant_contains",
+      "step": "ask_email",
+      "contains": "继续总结要点"
+    },
+    {
+      "type": "assistant_contains",
+      "step": "followup_email",
+      "contains": "prod.example.internal"
+    },
+    {
+      "type": "session_state_contains",
+      "session_id": "default",
+      "field": "focus_task_id",
+      "contains": "task-"
+    }
+  ]
+}

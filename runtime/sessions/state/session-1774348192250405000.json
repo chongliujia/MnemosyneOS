@@ -1,0 +1,13 @@
+{
+  "session_id": "session-1774348192250405000",
+  "topic": "帮我搜搜关于多agent的架构设计",
+  "focus_task_id": "task-1774348249066079000",
+  "last_user_act": "confirm",
+  "last_assistant_act": "followup_reply",
+  "working_set": {
+    "artifact_paths": [
+      "runtime/artifacts/reports/task-1774348249066079000-web-search.md"
+    ]
+  },
+  "updated_at": "2026-03-24T10:31:24.229608Z"
+}

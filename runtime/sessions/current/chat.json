@@ -1,0 +1,52 @@
+{
+  "messages": [
+    {
+      "message_id": "msg-1774251832286490000",
+      "role": "user",
+      "content": "Hello",
+      "execution_profile": "user",
+      "created_at": "2026-03-23T07:43:52.28649Z"
+    },
+    {
+      "message_id": "msg-1774251838976710000",
+      "role": "assistant",
+      "content": "Task task-1774251832288985000 started with skill task-plan.\nCurrent state: done.\nNext: plan generated.\nArtifacts: 1.\nObservations: 1.\nWork completed.\nRecent tasks: task-1774217487940162000, task-1774216150160855000, task-1774215804434112000.",
+      "task_id": "task-1774251832288985000",
+      "task_state": "done",
+      "selected_skill": "task-plan",
+      "execution_profile": "user",
+      "links": [
+        {
+          "label": "Task",
+          "href": "/ui/tasks?task_id=task-1774251832288985000"
+        },
+        {
+          "label": "Artifact: task-1774251832288985000-plan.md",
+          "href": "/ui/artifacts/view?path=runtime%2Fartifacts%2Freports%2Ftask-1774251832288985000-plan.md"
+        }
+      ],
+      "context": {
+        "recent_tasks": [
+          {
+            "task_id": "task-1774217487940162000",
+            "title": "Search the web for MnemosyneOS agent operating system positioning",
+            "state": "inbox"
+          },
+          {
+            "task_id": "task-1774216150160855000",
+            "title": "Open GitHub login",
+            "state": "planned",
+            "selected_skill": "browser-search"
+          },
+          {
+            "task_id": "task-1774215804434112000",
+            "title": "Search the web for MnemosyneOS agent operating system positioning",
+            "state": "blocked",
+            "selected_skill": "browser-search"
+          }
+        ]
+      },
+      "created_at": "2026-03-23T07:43:58.976767Z"
+    }
+  ]
+}

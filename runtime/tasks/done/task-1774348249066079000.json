@@ -1,0 +1,23 @@
+{
+  "task_id": "task-1774348249066079000",
+  "title": "帮我搜搜关于多agent的架构设计",
+  "goal": "帮我搜搜关于多agent的架构设计",
+  "state": "done",
+  "created_at": "2026-03-24T10:30:49.066079Z",
+  "updated_at": "2026-03-24T10:30:58.362681Z",
+  "requested_by": "web-chat",
+  "source": "web-chat",
+  "execution_profile": "user",
+  "requires_approval": false,
+  "selected_skill": "web-search",
+  "next_action": "web search completed",
+  "metadata": {
+    "chat_origin": "true",
+    "chat_recent_tasks": "task-1774346266677819000,task-1774260401518445000,task-1774259654200870000",
+    "skill_confidence": "0.95",
+    "skill_reason": "The user is requesting a search for information on multi-agent architecture design, which involves external research and is not a direct reply to an ongoing task.",
+    "web_search_artifact": "runtime/artifacts/reports/task-1774348249066079000-web-search.md",
+    "web_search_memory_card_id": "search:task-1774348249066079000",
+    "web_search_summary_card_id": "search:task-1774348249066079000:summary"
+  }
+}

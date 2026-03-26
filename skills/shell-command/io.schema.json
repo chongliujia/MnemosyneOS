@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "command": { "type": "string" },
+    "args": { "type": "string" },
+    "workdir": { "type": "string" }
+  },
+  "required": ["command"]
+}

@@ -1,0 +1,57 @@
+{
+  "name": "root_approval_flow",
+  "description": "Exercise root execution approval, rerun, and final file write.",
+  "tags": ["approval", "execution", "root"],
+  "steps": [
+    {
+      "id": "submit_root_edit",
+      "type": "submit_task",
+      "title": "Write root controlled file",
+      "goal": "Write a file using root execution",
+      "execution_profile": "root",
+      "selected_skill": "file-edit",
+      "metadata": {
+        "path": "notes/root-approval.txt",
+        "content": "root harness content\n"
+      }
+    },
+    {
+      "id": "request_root_approval",
+      "type": "run_task",
+      "task_ref": "submit_root_edit"
+    },
+    {
+      "id": "approve_root_approval",
+      "type": "approve_pending",
+      "approval_ref": "request_root_approval",
+      "approved_by": "harness"
+    },
+    {
+      "id": "run_root_edit",
+      "type": "run_task",
+      "task_ref": "submit_root_edit"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "request_root_approval",
+      "equals": "awaiting_approval"
+    },
+    {
+      "type": "approval_count",
+      "status": "consumed",
+      "expected": 1
+    },
+    {
+      "type": "task_state",
+      "step": "run_root_edit",
+      "equals": "done"
+    },
+    {
+      "type": "file_contains",
+      "path": "workspace/notes/root-approval.txt",
+      "contains": "root harness content"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "confidence": 0.9,
+  "created_at": "2026-03-25T06:57:20Z",
+  "intent_kind": "direct_reply",
+  "message": "我想了解一个agent工程设计架构",
+  "message_id": "msg-1774421836262851000",
+  "reason": "The user is asking a general question about agent engineering design architecture, which is informational and not a new task request or continuation of a previous task. It fits as answering a question within the current chat context.",
+  "session_id": "session-1774421797697380000",
+  "type": "chat-intent"
+}

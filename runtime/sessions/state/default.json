@@ -1,0 +1,14 @@
+{
+  "session_id": "default",
+  "topic": "我想看看具体方案内容",
+  "focus_task_id": "task-1774495176315323000",
+  "pending_question": "请问您想查看方案的哪些具体内容？或者需要我帮您调取该 artifact 的详细内容？",
+  "last_user_act": "new_task",
+  "last_assistant_act": "done",
+  "working_set": {
+    "artifact_paths": [
+      "runtime/artifacts/reports/task-1774495176315323000-plan.md"
+    ]
+  },
+  "updated_at": "2026-03-26T03:19:52.004765Z"
+}

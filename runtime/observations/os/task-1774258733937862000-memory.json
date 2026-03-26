@@ -1,0 +1,9 @@
+{
+  "artifact_path": "runtime/artifacts/reports/task-1774258733937862000-memory.md",
+  "generated_at": "2026-03-23T09:38:53Z",
+  "model_error": "",
+  "model_name": "deepseek-chat",
+  "model_provider": "deepseek",
+  "task_id": "task-1774258733937862000",
+  "type": "memory-consolidate"
+}

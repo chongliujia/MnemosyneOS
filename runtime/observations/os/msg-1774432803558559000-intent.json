@@ -1,0 +1,10 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-03-25T10:00:12Z",
+  "intent_kind": "direct_reply",
+  "message": "你好",
+  "message_id": "msg-1774432803558559000",
+  "reason": "The user is initiating a casual greeting, which is a simple social interaction without a specific task request.",
+  "session_id": "session-1774432800953742000",
+  "type": "chat-intent"
+}

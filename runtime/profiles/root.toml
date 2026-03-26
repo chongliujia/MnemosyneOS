@@ -1,0 +1,7 @@
+name = "root"
+description = "Privileged execution profile that requires explicit authorization."
+requires_approval = true
+allow_network = true
+allow_destructive = true
+allowed_path_roots = ["/"]
+allowed_commands = ["sudo", "apt", "apt-get", "systemctl", "journalctl", "mount", "umount", "sh", "bash", "zsh"]

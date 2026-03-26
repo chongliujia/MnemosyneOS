@@ -1,0 +1,50 @@
+{
+  "name": "shell_failure_observability",
+  "description": "Run a failing shell command and assert failure state, persisted artifact, and observation coverage.",
+  "tags": ["execution", "shell", "observability"],
+  "steps": [
+    {
+      "id": "submit_shell",
+      "type": "submit_task",
+      "title": "Read a missing file through shell",
+      "goal": "Run a shell command against a missing file",
+      "selected_skill": "shell-command",
+      "metadata": {
+        "command": "cat",
+        "args": "notes/missing-shell.txt"
+      }
+    },
+    {
+      "id": "run_shell",
+      "type": "run_task",
+      "task_ref": "submit_shell"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "selected_skill",
+      "step": "run_shell",
+      "equals": "shell-command"
+    },
+    {
+      "type": "task_state",
+      "step": "run_shell",
+      "equals": "failed"
+    },
+    {
+      "type": "artifact_count",
+      "step": "run_shell",
+      "min": 1
+    },
+    {
+      "type": "observation_count",
+      "step": "run_shell",
+      "min": 1
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_shell",
+      "contains": "missing-shell.txt"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "artifact_path": "runtime/artifacts/reports/task-1774421149528717000-web-search.md",
+  "goal": "我想了解一下harness",
+  "provider": "tavily",
+  "query": "我想了解一下harness",
+  "result_count": 5,
+  "status": "completed",
+  "task_id": "task-1774421149528717000",
+  "type": "web-search"
+}

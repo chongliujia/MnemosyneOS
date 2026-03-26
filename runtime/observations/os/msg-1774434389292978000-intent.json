@@ -1,0 +1,10 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-03-25T10:26:32Z",
+  "intent_kind": "direct_reply",
+  "message": "你是谁？",
+  "message_id": "msg-1774434389292978000",
+  "reason": "用户询问我的身份，这是一个直接回答问题的对话行为",
+  "session_id": "session-1774434374230964000",
+  "type": "chat-intent"
+}

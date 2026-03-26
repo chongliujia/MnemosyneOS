@@ -1,0 +1,30 @@
+{
+  "session_id": "session-1774434343500028000",
+  "title": "New Session",
+  "created_at": "2026-03-25T10:25:43.500118Z",
+  "updated_at": "2026-03-25T10:25:59.331786Z",
+  "messages": [
+    {
+      "message_id": "msg-1774434347486740000",
+      "session_id": "session-1774434343500028000",
+      "role": "user",
+      "content": "你好",
+      "dialogue_act": "chat",
+      "execution_profile": "user",
+      "created_at": "2026-03-25T10:25:47.48674Z"
+    },
+    {
+      "message_id": "msg-1774434356814416000",
+      "session_id": "session-1774434343500028000",
+      "role": "assistant",
+      "content": "你好！有什么我可以帮你的吗？",
+      "dialogue_act": "chat",
+      "intent_kind": "direct_reply",
+      "intent_reason": "social conversational reply",
+      "intent_confidence": 0.99,
+      "stage": "responded",
+      "execution_profile": "user",
+      "created_at": "2026-03-25T10:25:56.814421Z"
+    }
+  ]
+}

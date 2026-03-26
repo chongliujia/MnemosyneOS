@@ -1,0 +1,13 @@
+{
+  "input": {
+    "task_id": "string",
+    "path": "string",
+    "content": "string"
+  },
+  "output": {
+    "action_id": "string",
+    "changed_files": ["string"],
+    "observation_paths": ["string"],
+    "status": "string"
+  }
+}

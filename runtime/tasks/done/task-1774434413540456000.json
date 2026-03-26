@@ -1,0 +1,22 @@
+{
+  "task_id": "task-1774434413540456000",
+  "title": "我想了解一下open claw",
+  "goal": "我想了解一下open claw",
+  "state": "done",
+  "created_at": "2026-03-25T10:26:53.540456Z",
+  "updated_at": "2026-03-25T10:26:56.48606Z",
+  "requested_by": "web-chat",
+  "source": "web-chat",
+  "execution_profile": "user",
+  "requires_approval": false,
+  "selected_skill": "task-plan",
+  "next_action": "plan generated",
+  "metadata": {
+    "chat_conversation_context": "user: 你好\nassistant: 你好！有什么我可以帮你的吗？\nuser: 你是谁？\nassistant: 我是MnemosyneOS的对话助手。有什么可以帮你的吗？",
+    "chat_origin": "true",
+    "chat_recent_tasks": "task-1774433189654138000,task-1774421149528717000,task-1774348249066079000",
+    "plan_artifact": "runtime/artifacts/reports/task-1774434413540456000-plan.md",
+    "skill_confidence": "0.90",
+    "skill_reason": "contains operational marker"
+  }
+}

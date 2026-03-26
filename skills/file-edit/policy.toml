@@ -1,0 +1,6 @@
+profile = "user"
+approval = "review"
+risk = "medium"
+destructive = false
+filesystem_scope = ["workspace", "runtime/observations/filesystem"]
+network_scope = []

@@ -1,0 +1,10 @@
+{
+  "confidence": 0.9,
+  "created_at": "2026-03-23T09:38:53Z",
+  "intent_kind": "task_request",
+  "message": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "message_id": "msg-1774258733933864000",
+  "reason": "contains operational marker: open",
+  "session_id": "default",
+  "type": "chat-intent"
+}

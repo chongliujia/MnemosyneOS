@@ -1,0 +1,6 @@
+profile = "user"
+approval = "none"
+risk = "low"
+destructive = false
+filesystem_scope = ["runtime/artifacts/reports", "runtime/observations/os"]
+network_scope = []

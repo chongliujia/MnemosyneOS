@@ -1,0 +1,109 @@
+{
+  "session_id": "session-1774434374230964000",
+  "title": "New Session",
+  "created_at": "2026-03-25T10:26:14.231043Z",
+  "updated_at": "2026-03-25T10:27:02.627419Z",
+  "messages": [
+    {
+      "message_id": "msg-1774434376395664000",
+      "session_id": "session-1774434374230964000",
+      "role": "user",
+      "content": "你好",
+      "dialogue_act": "chat",
+      "execution_profile": "user",
+      "created_at": "2026-03-25T10:26:16.395664Z"
+    },
+    {
+      "message_id": "msg-1774434381355009000",
+      "session_id": "session-1774434374230964000",
+      "role": "assistant",
+      "content": "你好！有什么我可以帮你的吗？",
+      "dialogue_act": "chat",
+      "intent_kind": "direct_reply",
+      "intent_reason": "social conversational reply",
+      "intent_confidence": 0.99,
+      "stage": "responded",
+      "execution_profile": "user",
+      "created_at": "2026-03-25T10:26:21.355012Z"
+    },
+    {
+      "message_id": "msg-1774434389292978000",
+      "session_id": "session-1774434374230964000",
+      "role": "user",
+      "content": "你是谁？",
+      "dialogue_act": "answer_question",
+      "execution_profile": "user",
+      "created_at": "2026-03-25T10:26:29.292978Z"
+    },
+    {
+      "message_id": "msg-1774434392341401000",
+      "session_id": "session-1774434374230964000",
+      "role": "assistant",
+      "content": "我是MnemosyneOS的对话助手。有什么可以帮你的吗？",
+      "dialogue_act": "answer_question",
+      "intent_kind": "direct_reply",
+      "intent_reason": "用户询问我的身份，这是一个直接回答问题的对话行为",
+      "intent_confidence": 0.95,
+      "stage": "responded",
+      "execution_profile": "user",
+      "created_at": "2026-03-25T10:26:32.341406Z"
+    },
+    {
+      "message_id": "msg-1774434407902929000",
+      "session_id": "session-1774434374230964000",
+      "role": "user",
+      "content": "我想了解一下open claw",
+      "dialogue_act": "new_task",
+      "execution_profile": "user",
+      "created_at": "2026-03-25T10:26:47.902929Z"
+    },
+    {
+      "message_id": "msg-1774434413544697000",
+      "session_id": "session-1774434374230964000",
+      "role": "assistant",
+      "content": "Taskcompleted.There's1artifactreadyforreviewfromthe\"openclaw\"plan.Whatwouldyouliketodonext?Reviewtheartifact,ormoveontoanothertask?",
+      "dialogue_act": "new_task",
+      "intent_kind": "task_request",
+      "intent_reason": "contains operational marker",
+      "intent_confidence": 0.9,
+      "stage": "done",
+      "task_id": "task-1774434413540456000",
+      "task_state": "done",
+      "selected_skill": "task-plan",
+      "execution_profile": "user",
+      "links": [
+        {
+          "label": "Task",
+          "href": "/ui/tasks?task_id=task-1774434413540456000"
+        },
+        {
+          "label": "Artifact: task-1774434413540456000-plan.md",
+          "href": "/ui/artifacts/view?path=runtime%2Fartifacts%2Freports%2Ftask-1774434413540456000-plan.md"
+        }
+      ],
+      "context": {
+        "recent_tasks": [
+          {
+            "task_id": "task-1774433189654138000",
+            "title": "我想了解Agent的架构设计，我想构建一个多Agent",
+            "state": "done",
+            "selected_skill": "web-search"
+          },
+          {
+            "task_id": "task-1774421149528717000",
+            "title": "我想了解一下harness",
+            "state": "done",
+            "selected_skill": "web-search"
+          },
+          {
+            "task_id": "task-1774348249066079000",
+            "title": "帮我搜搜关于多agent的架构设计",
+            "state": "done",
+            "selected_skill": "web-search"
+          }
+        ]
+      },
+      "created_at": "2026-03-25T10:26:53.544708Z"
+    }
+  ]
+}

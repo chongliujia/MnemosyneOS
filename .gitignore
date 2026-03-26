@@ -1,0 +1,16 @@
+.DS_Store
+*.log
+.env.local
+
+# Go
+bin/
+mnemosyne-api
+mnemosynectl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/

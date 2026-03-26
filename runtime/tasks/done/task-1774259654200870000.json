@@ -1,0 +1,23 @@
+{
+  "task_id": "task-1774259654200870000",
+  "title": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "goal": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "state": "done",
+  "created_at": "2026-03-23T09:54:14.20087Z",
+  "updated_at": "2026-03-23T09:54:23.767312Z",
+  "requested_by": "web-chat",
+  "source": "web-chat",
+  "execution_profile": "user",
+  "requires_approval": false,
+  "selected_skill": "web-search",
+  "next_action": "web search completed",
+  "metadata": {
+    "chat_origin": "true",
+    "chat_recent_tasks": "task-1774259205183060000,task-1774258733937862000,task-1774257994445391000",
+    "skill_confidence": "0.95",
+    "skill_reason": "The user is asking to search for information about the memory design of OpenClaw, which requires external research or web-based information retrieval.",
+    "web_search_artifact": "runtime/artifacts/reports/task-1774259654200870000-web-search.md",
+    "web_search_memory_card_id": "search:task-1774259654200870000",
+    "web_search_summary_card_id": "search:task-1774259654200870000:summary"
+  }
+}

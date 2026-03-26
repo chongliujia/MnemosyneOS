@@ -1,0 +1,10 @@
+{
+  "confidence": 0.99,
+  "created_at": "2026-03-25T10:30:12Z",
+  "intent_kind": "direct_reply",
+  "message": "你好",
+  "message_id": "msg-1774434600528200000",
+  "reason": "social conversational reply",
+  "session_id": "session-1774434598679864000",
+  "type": "chat-intent"
+}

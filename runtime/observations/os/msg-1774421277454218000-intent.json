@@ -1,0 +1,10 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-03-25T06:48:02Z",
+  "intent_kind": "direct_reply",
+  "message": "我想了解完整的信息",
+  "message_id": "msg-1774421277454218000",
+  "reason": "The user message '我想了解完整的信息' is a direct continuation of the ongoing task about harness engineering in agent engineering, as indicated by the recent context where the user previously said '继续' and the assistant offered to search for more information. The session state shows focus_task_id is set, and last_user_act was continue_task, so this is a follow-up within the same thread.",
+  "session_id": "session-1774421104448493000",
+  "type": "chat-intent"
+}

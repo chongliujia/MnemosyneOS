@@ -1,0 +1,19 @@
+{
+  "task_id": "task-1774251832288985000",
+  "title": "Hello",
+  "goal": "Hello",
+  "state": "done",
+  "created_at": "2026-03-23T07:43:52.288985Z",
+  "updated_at": "2026-03-23T07:43:58.975254Z",
+  "requested_by": "web-chat",
+  "source": "web-chat",
+  "execution_profile": "user",
+  "requires_approval": false,
+  "selected_skill": "task-plan",
+  "next_action": "plan generated",
+  "metadata": {
+    "chat_origin": "true",
+    "chat_recent_tasks": "task-1774217487940162000,task-1774216150160855000,task-1774215804434112000",
+    "plan_artifact": "runtime/artifacts/reports/task-1774251832288985000-plan.md"
+  }
+}

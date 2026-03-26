@@ -1,0 +1,14 @@
+{
+  "session_id": "session-1774434374230964000",
+  "topic": "我想了解一下open claw",
+  "focus_task_id": "task-1774434413540456000",
+  "pending_question": "Taskcompleted.There's1artifactreadyforreviewfromthe\"openclaw\"plan.Whatwouldyouliketodonext?Reviewtheartifact,ormoveontoanothertask?",
+  "last_user_act": "new_task",
+  "last_assistant_act": "done",
+  "working_set": {
+    "artifact_paths": [
+      "runtime/artifacts/reports/task-1774434413540456000-plan.md"
+    ]
+  },
+  "updated_at": "2026-03-25T10:27:02.627743Z"
+}

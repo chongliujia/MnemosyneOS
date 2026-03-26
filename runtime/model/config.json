@@ -1,0 +1,19 @@
+{
+  "provider": "siliconflow",
+  "base_url": "https://api.siliconflow.cn/v1/chat/completions",
+  "api_key": "sk-xjitgwidkqbgxrsbzgcrofbnzpzuyecdmfjjggiwxawofzke",
+  "conversation": {
+    "model": "Pro/MiniMaxAI/MiniMax-M2.5",
+    "max_tokens": 2048,
+    "temperature": 0.2
+  },
+  "routing": {
+    "model": "Pro/MiniMaxAI/MiniMax-M2.5",
+    "max_tokens": 200
+  },
+  "skills": {
+    "model": "Pro/MiniMaxAI/MiniMax-M2.5",
+    "max_tokens": 1024,
+    "temperature": 0.2
+  }
+}

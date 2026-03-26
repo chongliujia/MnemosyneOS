@@ -1,0 +1,19 @@
+{
+  "task_id": "task-1774258733937862000",
+  "title": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "goal": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "state": "done",
+  "created_at": "2026-03-23T09:38:53.937862Z",
+  "updated_at": "2026-03-23T09:39:06.609749Z",
+  "requested_by": "web-chat",
+  "source": "web-chat",
+  "execution_profile": "user",
+  "requires_approval": false,
+  "selected_skill": "memory-consolidate",
+  "next_action": "memory consolidation recorded",
+  "metadata": {
+    "chat_origin": "true",
+    "chat_recent_tasks": "task-1774257994445391000,task-1774257976085011000,task-1774251832288985000",
+    "memory_artifact": "runtime/artifacts/reports/task-1774258733937862000-memory.md"
+  }
+}

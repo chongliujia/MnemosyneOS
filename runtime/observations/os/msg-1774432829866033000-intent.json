@@ -1,0 +1,10 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-03-25T10:00:34Z",
+  "intent_kind": "direct_reply",
+  "message": "你是谁？",
+  "message_id": "msg-1774432829866033000",
+  "reason": "The user is asking 'Who are you?', which is a general conversational inquiry about identity, not a task request or follow-up to a previous task. It fits as a chat turn to engage in dialogue.",
+  "session_id": "session-1774432800953742000",
+  "type": "chat-intent"
+}

@@ -1,0 +1,12 @@
+{
+  "input": {
+    "task_id": "string",
+    "title": "string",
+    "goal": "string"
+  },
+  "output": {
+    "artifact_paths": ["string"],
+    "observation_paths": ["string"],
+    "status": "string"
+  }
+}

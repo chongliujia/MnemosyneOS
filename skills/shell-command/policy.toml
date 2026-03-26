@@ -1,0 +1,3 @@
+risk = "medium"
+requires_approval_for = ["root"]
+allowed_execution_profiles = ["user", "root"]

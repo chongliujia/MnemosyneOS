@@ -1,0 +1,10 @@
+{
+  "confidence": 0.9,
+  "created_at": "2026-03-25T10:26:53Z",
+  "intent_kind": "task_request",
+  "message": "我想了解一下open claw",
+  "message_id": "msg-1774434407902929000",
+  "reason": "contains operational marker",
+  "session_id": "session-1774434374230964000",
+  "type": "chat-intent"
+}

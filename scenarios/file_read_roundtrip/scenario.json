@@ -1,0 +1,70 @@
+{
+  "name": "file_read_roundtrip",
+  "description": "Write a workspace file through the execution plane, then read it back as an artifact.",
+  "tags": ["execution", "filesystem"],
+  "steps": [
+    {
+      "id": "submit_file_edit",
+      "type": "submit_task",
+      "title": "Write harness note",
+      "goal": "Write a harness note file",
+      "selected_skill": "file-edit",
+      "metadata": {
+        "path": "notes/harness-roundtrip.txt",
+        "content": "runbook: verify the deployment window and notify operators\n"
+      }
+    },
+    {
+      "id": "run_file_edit",
+      "type": "run_task",
+      "task_ref": "submit_file_edit"
+    },
+    {
+      "id": "submit_file_read",
+      "type": "submit_task",
+      "title": "Read harness note",
+      "goal": "Read the harness note file",
+      "selected_skill": "file-read",
+      "metadata": {
+        "path": "notes/harness-roundtrip.txt"
+      }
+    },
+    {
+      "id": "run_file_read",
+      "type": "run_task",
+      "task_ref": "submit_file_read"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_file_edit",
+      "equals": "done"
+    },
+    {
+      "type": "task_state",
+      "step": "run_file_read",
+      "equals": "done"
+    },
+    {
+      "type": "selected_skill",
+      "step": "run_file_read",
+      "equals": "file-read"
+    },
+    {
+      "type": "artifact_count",
+      "step": "run_file_read",
+      "min": 1
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_file_read",
+      "contains": "verify the deployment window"
+    },
+    {
+      "type": "file_contains",
+      "path": "workspace/notes/harness-roundtrip.txt",
+      "contains": "notify operators"
+    }
+  ]
+}

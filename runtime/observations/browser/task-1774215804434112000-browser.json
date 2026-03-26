@@ -1,0 +1,20 @@
+{
+  "artifact_path": "runtime/artifacts/reports/task-1774215804434112000-browser.md",
+  "challenge_reason": "page requested a browser challenge",
+  "challenge_type": "anti-bot",
+  "goal": "Search the web for MnemosyneOS agent operating system positioning",
+  "interactive_count": 2,
+  "policy_action": "block",
+  "policy_reason": "page requested a browser challenge",
+  "reason": "page requested a browser challenge",
+  "requires_human": true,
+  "screenshot_source": "chromedp",
+  "screenshot_taken": true,
+  "sensitive_kind": "anti-bot",
+  "status": "blocked",
+  "task_id": "task-1774215804434112000",
+  "text_preview": "DuckDuckGo Unfortunately, bots use DuckDuckGo too. Please complete the following challenge to confirm this search was made by a human. Select all squares containing a duck: Submit Images not loading?",
+  "title": "DuckDuckGo",
+  "type": "browser-search",
+  "url": "https://html.duckduckgo.com/html/?q=Search+the+web+for+MnemosyneOS+agent+operating+system+positioning"
+}

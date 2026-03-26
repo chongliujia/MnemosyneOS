@@ -1,0 +1,10 @@
+{
+  "artifact_path": "runtime/artifacts/reports/task-1774259654200870000-web-search.md",
+  "goal": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "provider": "tavily",
+  "query": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "result_count": 5,
+  "status": "completed",
+  "task_id": "task-1774259654200870000",
+  "type": "web-search"
+}

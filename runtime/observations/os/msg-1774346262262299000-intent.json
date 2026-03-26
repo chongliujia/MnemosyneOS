@@ -1,0 +1,10 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-03-24T09:57:46Z",
+  "intent_kind": "task_request",
+  "message": "帮我查一下agent的架构设计",
+  "message_id": "msg-1774346262262299000",
+  "reason": "The user is asking to search for information about 'agent's architecture design', which is a clear request for external research that requires web search to find relevant and up-to-date information.",
+  "session_id": "session-1774346231760825000",
+  "type": "chat-intent"
+}

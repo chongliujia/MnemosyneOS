@@ -1,0 +1,10 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-03-23T10:06:38Z",
+  "intent_kind": "task_request",
+  "message": "帮我搜索一下 OpenClaw 的 memory 设计",
+  "message_id": "msg-1774260391723950000",
+  "reason": "The user is explicitly asking the system to perform a search operation regarding OpenClaw's memory design, which is a clear request for work to be done.",
+  "session_id": "session-1774260382574343000",
+  "type": "chat-intent"
+}

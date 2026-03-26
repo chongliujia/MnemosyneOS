@@ -1,0 +1,83 @@
+{
+  "name": "email_inbox_summary",
+  "description": "Run a fixture-backed inbox scan and assert artifact and observation output.",
+  "tags": ["email", "memory", "connector"],
+  "fixtures": {
+    "email_response_file": "fixtures/email_response.json"
+  },
+  "steps": [
+    {
+      "id": "submit_email",
+      "type": "submit_task",
+      "title": "Check inbox for deployment notes",
+      "goal": "Check email inbox for deployment notes",
+      "selected_skill": "email-inbox",
+      "metadata": {
+        "query": "deployment"
+      }
+    },
+    {
+      "id": "run_email",
+      "type": "run_task",
+      "task_ref": "submit_email"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_email",
+      "equals": "done"
+    },
+    {
+      "type": "selected_skill",
+      "step": "run_email",
+      "equals": "email-inbox"
+    },
+    {
+      "type": "artifact_count",
+      "step": "run_email",
+      "min": 1
+    },
+    {
+      "type": "observation_count",
+      "step": "run_email",
+      "min": 1
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_email",
+      "contains": "deployment window"
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_email",
+      "contains": "prod.example.internal"
+    },
+    {
+      "type": "memory_card_count",
+      "field": "email_thread",
+      "min": 1
+    },
+    {
+      "type": "memory_card_count",
+      "field": "email_message",
+      "min": 2
+    },
+    {
+      "type": "memory_card_contains",
+      "field": "email_summary",
+      "contains": "deployment"
+    },
+    {
+      "type": "edge_count",
+      "field": "thread_message",
+      "min": 2
+    },
+    {
+      "type": "recall_contains",
+      "query": "deployment",
+      "source": "email",
+      "contains": "prod.example.internal"
+    }
+  ]
+}
