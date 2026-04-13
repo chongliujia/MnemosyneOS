@@ -1,7 +1,11 @@
 {
   "name": "root_approval_flow",
   "description": "Exercise root execution approval, rerun, and final file write.",
-  "tags": ["approval", "execution", "root"],
+  "tags": [
+    "approval",
+    "execution",
+    "root"
+  ],
   "steps": [
     {
       "id": "submit_root_edit",
@@ -53,5 +57,6 @@
       "path": "workspace/notes/root-approval.txt",
       "contains": "root harness content"
     }
-  ]
+  ],
+  "lane": "smoke"
 }

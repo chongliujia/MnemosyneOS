@@ -1,7 +1,11 @@
 {
   "name": "shell_failure_observability",
   "description": "Run a failing shell command and assert failure state, persisted artifact, and observation coverage.",
-  "tags": ["execution", "shell", "observability"],
+  "tags": [
+    "execution",
+    "shell",
+    "observability"
+  ],
   "steps": [
     {
       "id": "submit_shell",
@@ -46,5 +50,6 @@
       "step": "run_shell",
       "contains": "missing-shell.txt"
     }
-  ]
+  ],
+  "lane": "regression"
 }

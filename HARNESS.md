@@ -19,6 +19,15 @@ Phase 1 focuses on a compact industrial baseline:
 3. `chat_followup_continuity`
 4. `email_inbox_summary`
 5. `file_read_roundtrip`
+6. `working_memory_followup`
+7. `memory_write_recall_roundtrip`
+8. `approval_memory_boundary`
+9. `session_recovery_continuity`
+10. `memory_contamination_resistance`
+11. `candidate_memory_promotion`
+12. `memory_contamination_recovery`
+13. `procedural_promotion`
+14. `procedural_extraction_repeated_runs`
 
 Each scenario runs inside an isolated runtime root and produces a run report.
 
@@ -43,6 +52,7 @@ Top-level fields:
 
 - `name`
 - `description`
+- `lane`
 - `fixtures`
 - `steps`
 - `assertions`
@@ -98,6 +108,60 @@ Supported fields:
 - `requested_by`
 - `source`
 - `execution_profile`
+
+### `restart_runtime`
+
+Rebuild the harness runtime services from the existing runtime root.
+
+Use this to validate:
+
+- session continuity after restart
+- working-memory recovery
+- replayable runtime reconstruction
+
+### `consolidate_memory`
+
+Promote candidate memory into active durable memory without routing through chat.
+
+Supported fields:
+
+- `metadata.card_type` (optional)
+- `metadata.scope` (optional)
+- `metadata.limit` (optional)
+- `metadata.archive_remaining` (optional)
+- `metadata.extract_procedures` (optional)
+- `metadata.task_class` (optional)
+- `metadata.selected_skill` (optional)
+- `metadata.min_runs` (optional)
+
+Use this to validate:
+
+- candidate-to-active promotion
+- recall visibility after consolidation
+- bounded memory promotion by type or scope
+- procedure extraction from repeated successful task runs
+
+### `seed_memory_card`
+
+Insert a deterministic durable-memory card directly into the harness runtime.
+
+Supported fields:
+
+- `metadata.card_id`
+- `metadata.card_type`
+- `metadata.scope` (optional)
+- `metadata.status` (optional)
+- `metadata.supersedes` (optional)
+- `metadata.source` (optional)
+- `metadata.confidence` (optional)
+- `metadata.content.<field>` for content payload fields
+
+Use this to validate:
+
+- fact lifecycle transitions
+- supersession logic
+- archive policies
+- recall boundaries without routing through a live task
 
 ## Supported Assertions
 
@@ -175,6 +239,14 @@ Fields:
 
 Relative paths are resolved from the run's `runtime/` directory.
 
+### `file_absent`
+
+Assert a runtime file does not exist.
+
+Fields:
+
+- `path`
+
 ### `session_state_contains`
 
 Assert a session state field contains a substring.
@@ -194,6 +266,162 @@ Supported fields:
 - `last_user_act`
 - `last_assistant_act`
 
+### `working_topic_contains`
+
+Assert the session working-memory topic contains a substring.
+
+Fields:
+
+- `session_id`
+- `contains`
+
+### `working_focus_task_equals`
+
+Assert the session working-memory focus task matches an exact task id.
+
+Fields:
+
+- `session_id`
+- `equals`
+
+### `working_pending_question_contains`
+
+Assert the session working-memory pending question contains a substring.
+
+Fields:
+
+- `session_id`
+- `contains`
+
+### `working_pending_action_contains`
+
+Assert the session working-memory pending action contains a substring.
+
+Fields:
+
+- `session_id`
+- `contains`
+
+### `durable_card_count`
+
+Assert the durable memory store contains cards of a given type.
+
+Fields:
+
+- `field` (`card_type`)
+- `expected` or `min`
+
+### `durable_card_contains`
+
+Assert a durable card of a given type contains a substring in its content payload.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains`
+
+### `durable_card_status`
+
+Assert a matching durable card has the expected lifecycle status.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains` (optional content filter)
+- `equals` (expected status)
+
+Expected lifecycle values currently include:
+
+- `candidate`
+- `active`
+- `stale`
+- `superseded`
+- `archived`
+
+### `durable_card_confidence_range`
+
+Assert a matching durable card has provenance confidence inside a bounded range.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains` (optional content filter)
+- `min_confidence`
+- `max_confidence`
+
+### `durable_card_scope`
+
+Assert a matching durable card belongs to the expected memory scope.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains` (optional content filter)
+- `equals` (expected scope, for example `user` or `project`)
+
+### `durable_card_supersedes`
+
+Assert a matching durable card explicitly supersedes an older fact.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains` (optional content filter)
+- `equals` (expected superseded card id)
+
+### `procedure_count`
+
+Assert the active durable procedure store contains at least N procedures.
+
+Fields:
+
+- `expected` or `min`
+
+### `procedure_contains`
+
+Assert an active procedure contains a substring in its content payload.
+
+Fields:
+
+- `contains`
+
+### `procedure_step_contains`
+
+Assert an active procedure includes a matching step, guardrail, or summary fragment.
+
+Fields:
+
+- `contains`
+
+### `recall_contains`
+
+Assert recall returns content containing a substring.
+
+Fields:
+
+- `query`
+- `source` (optional)
+- `contains`
+
+### `recall_not_contains`
+
+Assert recall does not return content containing a substring.
+
+Fields:
+
+- `query`
+- `source` (optional)
+- `contains`
+
+### `edge_exists`
+
+Assert at least one memory edge exists for the given type.
+
+Fields:
+
+- `field` (`edge_type`)
+- `contains` (optional substring filter matched against `from_card_id` or `to_card_id`)
+
 ## Run Output
 
 Each harness execution writes into `runs/<timestamp>-<scenario>/`.
@@ -212,6 +440,33 @@ The embedded `runtime/` directory contains the same durable artifacts used by th
 - observations
 - artifacts
 - sessions
+
+## Tags
+
+Scenarios can include tags to support selective execution and reporting.
+
+Current tags are used for domains such as:
+
+- `chat`
+- `memory`
+- `procedural`
+- `working-memory`
+- `connector`
+- `execution`
+- `email`
+- `web`
+- `recall`
+- `approval`
+- `shell`
+- `observability`
+
+## Lanes
+
+Scenarios can also include a `lane` for layered execution:
+
+- `smoke`
+- `regression`
+- `soak`
 
 ## CLI
 
@@ -234,11 +489,23 @@ go run ./cmd/mnemosyne-harness -tags chat,memory
 go run ./cmd/mnemosyne-harness -tags execution
 ```
 
+Run a lane:
+
+```bash
+go run ./cmd/mnemosyne-harness -lane smoke
+go run ./cmd/mnemosyne-harness -lane regression -tags memory
+```
+
 Choose a custom output root:
 
 ```bash
 go run ./cmd/mnemosyne-harness -out ./runs
 ```
+
+See also:
+
+- [HARNESS_ARCHITECTURE.md](/Users/jiachongliu/My-Github-Project/MnemosyneOS/HARNESS_ARCHITECTURE.md)
+- [docs/memory/MEMORY_ARCHITECTURE.md](/Users/jiachongliu/My-Github-Project/MnemosyneOS/docs/memory/MEMORY_ARCHITECTURE.md)
 
 Diff two runs:
 
@@ -260,6 +527,7 @@ Build a benchmark rollup:
 ```bash
 go run ./cmd/mnemosyne-harness -rollup ./runs
 go run ./cmd/mnemosyne-harness -rollup ./runs -tags chat,memory
+go run ./cmd/mnemosyne-harness -rollup ./runs -lane regression
 go run ./cmd/mnemosyne-harness -rollup ./runs -rollup-json ./runs/rollup.json
 ```
 
@@ -268,6 +536,7 @@ Save a golden baseline:
 ```bash
 go run ./cmd/mnemosyne-harness -save-baseline ./runs -baseline-dir ./baselines/harness
 go run ./cmd/mnemosyne-harness -save-baseline ./runs -baseline-dir ./baselines/harness -tags execution
+go run ./cmd/mnemosyne-harness -save-baseline ./runs -baseline-dir ./baselines/harness -lane smoke
 ```
 
 Check current runs against the baseline:
@@ -275,6 +544,7 @@ Check current runs against the baseline:
 ```bash
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -tags email
+go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -lane regression
 ```
 
 ## Design Notes

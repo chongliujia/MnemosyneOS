@@ -17,6 +17,7 @@ func main() {
 	var (
 		scenarioPath  = flag.String("scenario", "", "path to a scenario directory or scenario.json")
 		tagFilter     = flag.String("tags", "", "comma-separated scenario tags to run, for example chat,memory")
+		laneFilter    = flag.String("lane", "", "scenario lane to run, for example smoke or regression")
 		outRoot       = flag.String("out", "runs", "directory to write harness runs into")
 		reportA       = flag.String("report-a", "", "path to a run directory or report.json for diff left side")
 		reportB       = flag.String("report-b", "", "path to a run directory or report.json for diff right side")
@@ -29,9 +30,10 @@ func main() {
 	flag.Parse()
 
 	tags := strings.Split(*tagFilter, ",")
+	lane := strings.TrimSpace(*laneFilter)
 
 	if strings.TrimSpace(*rollupRoot) != "" {
-		rollup, err := harness.BuildRollupWithTags(*rollupRoot, tags)
+		rollup, err := harness.BuildRollupWithScope(*rollupRoot, tags, lane)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "build rollup: %v\n", err)
 			os.Exit(1)
@@ -47,7 +49,7 @@ func main() {
 	}
 
 	if strings.TrimSpace(*saveBaseline) != "" {
-		written, err := harness.SaveBaselineWithTags(*saveBaseline, *baselineDir, tags)
+		written, err := harness.SaveBaselineWithScope(*saveBaseline, *baselineDir, tags, lane)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "save baseline: %v\n", err)
 			os.Exit(1)
@@ -59,7 +61,7 @@ func main() {
 	}
 
 	if strings.TrimSpace(*checkBaseline) != "" {
-		result, err := harness.CheckBaselineWithTags(*checkBaseline, *baselineDir, tags)
+		result, err := harness.CheckBaselineWithScope(*checkBaseline, *baselineDir, tags, lane)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "check baseline: %v\n", err)
 			os.Exit(1)
@@ -108,6 +110,13 @@ func main() {
 		paths, err = harness.FilterScenarioPathsByTags(paths, tags)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "filter scenarios: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if lane != "" {
+		paths, err = harness.FilterScenarioPathsByLane(paths, lane)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "filter scenarios by lane: %v\n", err)
 			os.Exit(1)
 		}
 	}

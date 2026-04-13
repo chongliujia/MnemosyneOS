@@ -33,16 +33,22 @@ func (s *Store) CreateCard(req CreateCardRequest) (Card, error) {
 	if req.CardID == "" || req.CardType == "" {
 		return Card{}, fmt.Errorf("%w: card_id and card_type are required", ErrInvalidArgument)
 	}
+	status := NormalizeCardStatus(req.Status)
+	if status == "" {
+		return Card{}, fmt.Errorf("%w: unsupported card status %q", ErrInvalidArgument, req.Status)
+	}
 
 	now := time.Now().UTC()
 	card := Card{
 		CardID:       req.CardID,
 		CardType:     req.CardType,
+		Scope:        req.Scope,
 		CreatedAt:    now,
 		ValidFrom:    req.ValidFrom,
 		ValidTo:      req.ValidTo,
 		Version:      1,
-		Status:       "active",
+		Status:       status,
+		Supersedes:   req.Supersedes,
 		Content:      req.Content,
 		EvidenceRefs: req.EvidenceRefs,
 		Provenance:   req.Provenance,
@@ -66,6 +72,9 @@ func (s *Store) UpdateCard(cardID string, req UpdateCardRequest) (Card, error) {
 	if cardID == "" {
 		return Card{}, fmt.Errorf("%w: card_id is required", ErrInvalidArgument)
 	}
+	if req.Status != "" && NormalizeCardStatus(req.Status) == "" {
+		return Card{}, fmt.Errorf("%w: unsupported card status %q", ErrInvalidArgument, req.Status)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,12 +89,14 @@ func (s *Store) UpdateCard(cardID string, req UpdateCardRequest) (Card, error) {
 	updated := Card{
 		CardID:       latest.CardID,
 		CardType:     latest.CardType,
+		Scope:        latest.Scope,
 		CreatedAt:    latest.CreatedAt,
 		ValidFrom:    req.ValidFrom,
 		ValidTo:      req.ValidTo,
 		Version:      latest.Version + 1,
 		PrevVersion:  latest.CardID + "#v" + fmt.Sprintf("%d", latest.Version),
 		Status:       latest.Status,
+		Supersedes:   latest.Supersedes,
 		Content:      latest.Content,
 		EvidenceRefs: latest.EvidenceRefs,
 		Provenance:   latest.Provenance,
@@ -100,7 +111,13 @@ func (s *Store) UpdateCard(cardID string, req UpdateCardRequest) (Card, error) {
 		updated.Content = req.Content
 	}
 	if req.Status != "" {
-		updated.Status = req.Status
+		updated.Status = NormalizeCardStatus(req.Status)
+	}
+	if req.Supersedes != "" {
+		updated.Supersedes = req.Supersedes
+	}
+	if req.Scope != "" {
+		updated.Scope = req.Scope
 	}
 	if req.EvidenceRefs != nil {
 		updated.EvidenceRefs = req.EvidenceRefs
@@ -178,6 +195,12 @@ func (s *Store) Query(req QueryRequest) QueryResponse {
 			continue
 		}
 		if req.CardType != "" && card.CardType != req.CardType {
+			continue
+		}
+		if req.Scope != "" && card.Scope != req.Scope {
+			continue
+		}
+		if req.Status != "" && card.Status != req.Status {
 			continue
 		}
 		resp.Cards = append(resp.Cards, *card)

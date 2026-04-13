@@ -1,0 +1,81 @@
+{
+  "name": "memory_contamination_recovery",
+  "description": "Ensure an existing contaminated durable fact can be corrected through candidate promotion and no longer dominates recall.",
+  "lane": "regression",
+  "tags": [
+    "memory",
+    "contamination",
+    "consolidation",
+    "web"
+  ],
+  "steps": [
+    {
+      "id": "seed_contaminated_fact",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "search:openclaw:contaminated",
+        "card_type": "search_summary",
+        "scope": "project",
+        "status": "active",
+        "source": "harness",
+        "confidence": "0.65",
+        "content.summary": "OpenClaw only uses embedding top-k retrieval."
+      }
+    },
+    {
+      "id": "seed_corrective_fact",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "search:openclaw:corrected",
+        "card_type": "search_summary",
+        "scope": "project",
+        "status": "candidate",
+        "supersedes": "search:openclaw:contaminated",
+        "source": "harness",
+        "confidence": "0.93",
+        "content.summary": "OpenClaw uses hybrid retrieval and temporal decay instead of embedding-only recall."
+      }
+    },
+    {
+      "id": "promote_corrective_fact",
+      "type": "consolidate_memory",
+      "metadata": {
+        "card_type": "search_summary",
+        "scope": "project",
+        "limit": "1"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "durable_card_status",
+      "field": "search_summary",
+      "contains": "only uses embedding top-k retrieval",
+      "equals": "superseded"
+    },
+    {
+      "type": "durable_card_status",
+      "field": "search_summary",
+      "contains": "hybrid retrieval and temporal decay",
+      "equals": "active"
+    },
+    {
+      "type": "durable_card_supersedes",
+      "field": "search_summary",
+      "contains": "hybrid retrieval and temporal decay",
+      "equals": "search:openclaw:contaminated"
+    },
+    {
+      "type": "recall_contains",
+      "query": "OpenClaw retrieval design",
+      "source": "web",
+      "contains": "hybrid retrieval and temporal decay"
+    },
+    {
+      "type": "recall_not_contains",
+      "query": "OpenClaw retrieval design",
+      "source": "web",
+      "contains": "only uses embedding top-k retrieval"
+    }
+  ]
+}

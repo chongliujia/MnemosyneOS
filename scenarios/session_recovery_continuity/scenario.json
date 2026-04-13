@@ -1,0 +1,61 @@
+{
+  "name": "session_recovery_continuity",
+  "description": "Ensure a session keeps its working context across a runtime restart and can continue a short follow-up.",
+  "lane": "regression",
+  "tags": [
+    "chat",
+    "memory",
+    "working-memory",
+    "recovery"
+  ],
+  "fixtures": {
+    "search_response_file": "fixtures/search_response.json"
+  },
+  "steps": [
+    {
+      "id": "ask_openclaw_search",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "帮我搜索一下 OpenClaw 的 memory 设计"
+    },
+    {
+      "id": "restart_runtime",
+      "type": "restart_runtime"
+    },
+    {
+      "id": "followup_after_restart",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "继续展开"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "selected_skill",
+      "step": "ask_openclaw_search",
+      "equals": "web-search"
+    },
+    {
+      "type": "task_state",
+      "step": "ask_openclaw_search",
+      "equals": "done"
+    },
+    {
+      "type": "assistant_contains",
+      "step": "followup_after_restart",
+      "contains": "OpenClaw"
+    },
+    {
+      "type": "session_state_contains",
+      "session_id": "default",
+      "field": "topic",
+      "contains": "OpenClaw"
+    },
+    {
+      "type": "session_state_contains",
+      "session_id": "default",
+      "field": "focus_task_id",
+      "contains": "task-"
+    }
+  ]
+}

@@ -20,24 +20,33 @@ type Rollup struct {
 }
 
 type ScenarioStats struct {
-	ScenarioName       string   `json:"scenario_name"`
-	RunCount           int      `json:"run_count"`
-	PassedCount        int      `json:"passed_count"`
-	FailedCount        int      `json:"failed_count"`
-	AssertionCount     int      `json:"assertion_count"`
-	FailedAssertions   int      `json:"failed_assertions"`
-	AverageDurationMS  int64    `json:"average_duration_ms"`
-	LatestRunDir       string   `json:"latest_run_dir,omitempty"`
-	LatestError        string   `json:"latest_error,omitempty"`
-	TopFailureMessages []string `json:"top_failure_messages,omitempty"`
+	ScenarioName        string   `json:"scenario_name"`
+	RunCount            int      `json:"run_count"`
+	PassedCount         int      `json:"passed_count"`
+	FailedCount         int      `json:"failed_count"`
+	AssertionCount      int      `json:"assertion_count"`
+	FailedAssertions    int      `json:"failed_assertions"`
+	WorkingAssertions   int      `json:"working_assertions,omitempty"`
+	DurableAssertions   int      `json:"durable_assertions,omitempty"`
+	RecallAssertions    int      `json:"recall_assertions,omitempty"`
+	ProcedureAssertions int      `json:"procedure_assertions,omitempty"`
+	MemoryFailures      int      `json:"memory_failures,omitempty"`
+	AverageDurationMS   int64    `json:"average_duration_ms"`
+	LatestRunDir        string   `json:"latest_run_dir,omitempty"`
+	LatestError         string   `json:"latest_error,omitempty"`
+	TopFailureMessages  []string `json:"top_failure_messages,omitempty"`
 }
 
 func BuildRollup(root string) (Rollup, error) {
-	return BuildRollupWithTags(root, nil)
+	return BuildRollupWithScope(root, nil, "")
 }
 
 func BuildRollupWithTags(root string, tags []string) (Rollup, error) {
-	reports, err := CollectRunReports(root, tags)
+	return BuildRollupWithScope(root, tags, "")
+}
+
+func BuildRollupWithScope(root string, tags []string, lane string) (Rollup, error) {
+	reports, err := CollectRunReportsWithScope(root, tags, lane)
 	if err != nil {
 		return Rollup{}, err
 	}
@@ -81,7 +90,20 @@ func BuildRollupWithTags(root string, tags []string) (Rollup, error) {
 		}
 		entry.stats.AssertionCount += len(report.AssertionResults)
 		for _, assertion := range report.AssertionResults {
+			switch {
+			case isWorkingMemoryAssertion(assertion.Type):
+				entry.stats.WorkingAssertions++
+			case isProcedureMemoryAssertion(assertion.Type):
+				entry.stats.ProcedureAssertions++
+			case isDurableMemoryAssertion(assertion.Type):
+				entry.stats.DurableAssertions++
+			case isRecallMemoryAssertion(assertion.Type):
+				entry.stats.RecallAssertions++
+			}
 			if !assertion.Passed {
+				if isWorkingMemoryAssertion(assertion.Type) || isProcedureMemoryAssertion(assertion.Type) || isDurableMemoryAssertion(assertion.Type) || isRecallMemoryAssertion(assertion.Type) {
+					entry.stats.MemoryFailures++
+				}
 				entry.stats.FailedAssertions++
 				key := firstNonEmpty(assertion.Details, assertion.Description, assertion.Type)
 				entry.failures[key]++
@@ -108,11 +130,16 @@ func BuildRollupWithTags(root string, tags []string) (Rollup, error) {
 }
 
 func CollectRunReports(root string, tags []string) ([]RunReport, error) {
+	return CollectRunReportsWithScope(root, tags, "")
+}
+
+func CollectRunReportsWithScope(root string, tags []string, lane string) ([]RunReport, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return nil, fmt.Errorf("run root is required")
 	}
 	tags = NormalizeTags(tags)
+	lane = NormalizeLane(lane)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -129,6 +156,9 @@ func CollectRunReports(root string, tags []string) ([]RunReport, error) {
 		if !reportMatchesTags(report, tags) {
 			continue
 		}
+		if lane != "" && NormalizeLane(report.ScenarioLane) != lane {
+			continue
+		}
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool {
@@ -138,11 +168,15 @@ func CollectRunReports(root string, tags []string) ([]RunReport, error) {
 }
 
 func SaveBaseline(srcRoot, baselineRoot string) ([]string, error) {
-	return SaveBaselineWithTags(srcRoot, baselineRoot, nil)
+	return SaveBaselineWithScope(srcRoot, baselineRoot, nil, "")
 }
 
 func SaveBaselineWithTags(srcRoot, baselineRoot string, tags []string) ([]string, error) {
-	reports, err := CollectRunReports(srcRoot, tags)
+	return SaveBaselineWithScope(srcRoot, baselineRoot, tags, "")
+}
+
+func SaveBaselineWithScope(srcRoot, baselineRoot string, tags []string, lane string) ([]string, error) {
+	reports, err := CollectRunReportsWithScope(srcRoot, tags, lane)
 	if err != nil {
 		return nil, err
 	}
@@ -171,11 +205,15 @@ type BaselineCheck struct {
 }
 
 func CheckBaseline(srcRoot, baselineRoot string) (BaselineCheck, error) {
-	return CheckBaselineWithTags(srcRoot, baselineRoot, nil)
+	return CheckBaselineWithScope(srcRoot, baselineRoot, nil, "")
 }
 
 func CheckBaselineWithTags(srcRoot, baselineRoot string, tags []string) (BaselineCheck, error) {
-	reports, err := CollectRunReports(srcRoot, tags)
+	return CheckBaselineWithScope(srcRoot, baselineRoot, tags, "")
+}
+
+func CheckBaselineWithScope(srcRoot, baselineRoot string, tags []string, lane string) (BaselineCheck, error) {
+	reports, err := CollectRunReportsWithScope(srcRoot, tags, lane)
 	if err != nil {
 		return BaselineCheck{}, err
 	}
@@ -211,13 +249,18 @@ func RenderRollupText(rollup Rollup) string {
 	}
 	for _, scenario := range rollup.ScenarioResults {
 		lines = append(lines,
-			fmt.Sprintf("%s: runs=%d pass=%d fail=%d avg=%dms failed_assertions=%d",
+			fmt.Sprintf("%s: runs=%d pass=%d fail=%d avg=%dms failed_assertions=%d working=%d durable=%d procedure=%d recall=%d memory_failures=%d",
 				scenario.ScenarioName,
 				scenario.RunCount,
 				scenario.PassedCount,
 				scenario.FailedCount,
 				scenario.AverageDurationMS,
 				scenario.FailedAssertions,
+				scenario.WorkingAssertions,
+				scenario.DurableAssertions,
+				scenario.ProcedureAssertions,
+				scenario.RecallAssertions,
+				scenario.MemoryFailures,
 			),
 		)
 		for _, failure := range scenario.TopFailureMessages {
@@ -225,6 +268,57 @@ func RenderRollupText(rollup Rollup) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func isWorkingMemoryAssertion(kind string) bool {
+	switch kind {
+	case AssertSessionStateContain,
+		AssertWorkingTopicContains,
+		AssertWorkingFocusTaskEquals,
+		AssertWorkingPendingQuestionContains,
+		AssertWorkingPendingActionContains:
+		return true
+	default:
+		return false
+	}
+}
+
+func isDurableMemoryAssertion(kind string) bool {
+	switch kind {
+	case AssertMemoryCardCount,
+		AssertMemoryCardContains,
+		AssertEdgeCount,
+		AssertDurableCardCount,
+		AssertDurableCardContains,
+		AssertDurableCardStatus,
+		AssertDurableCardConfidenceRange,
+		AssertDurableCardScope,
+		AssertDurableCardSupersedes,
+		AssertEdgeExists:
+		return true
+	default:
+		return false
+	}
+}
+
+func isProcedureMemoryAssertion(kind string) bool {
+	switch kind {
+	case AssertProcedureCount,
+		AssertProcedureContains,
+		AssertProcedureStepContains:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRecallMemoryAssertion(kind string) bool {
+	switch kind {
+	case AssertRecallContains, AssertRecallNotContains:
+		return true
+	default:
+		return false
+	}
 }
 
 func topFailureMessages(failures map[string]int, limit int) []string {

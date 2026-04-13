@@ -1,0 +1,61 @@
+{
+  "name": "working_memory_followup",
+  "description": "Ensure session working memory preserves topic and focus across a search request and a short follow-up.",
+  "tags": [
+    "chat",
+    "memory",
+    "working-memory",
+    "connector"
+  ],
+  "fixtures": {
+    "search_response_file": "fixtures/search_response.json"
+  },
+  "steps": [
+    {
+      "id": "ask_search",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "帮我搜索一下 OpenClaw 的 memory 设计"
+    },
+    {
+      "id": "followup_need_full",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "我想了解完整的信息"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "selected_skill",
+      "step": "ask_search",
+      "equals": "web-search"
+    },
+    {
+      "type": "task_state",
+      "step": "ask_search",
+      "equals": "done"
+    },
+    {
+      "type": "assistant_contains",
+      "step": "ask_search",
+      "contains": "继续展开这些结果"
+    },
+    {
+      "type": "assistant_contains",
+      "step": "followup_need_full",
+      "contains": "OpenClaw"
+    },
+    {
+      "type": "working_topic_contains",
+      "session_id": "default",
+      "contains": "OpenClaw"
+    },
+    {
+      "type": "session_state_contains",
+      "session_id": "default",
+      "field": "focus_task_id",
+      "contains": "task-"
+    }
+  ],
+  "lane": "regression"
+}

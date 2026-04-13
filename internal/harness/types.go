@@ -7,6 +7,9 @@ const (
 	StepTypeRunTask        = "run_task"
 	StepTypeApprovePending = "approve_pending"
 	StepTypeSendChat       = "send_chat"
+	StepTypeRestartRuntime = "restart_runtime"
+	StepTypeConsolidate    = "consolidate_memory"
+	StepTypeSeedMemoryCard = "seed_memory_card"
 
 	AssertTaskState           = "task_state"
 	AssertSelectedSkill       = "selected_skill"
@@ -21,11 +24,29 @@ const (
 	AssertMemoryCardContains  = "memory_card_contains"
 	AssertEdgeCount           = "edge_count"
 	AssertRecallContains      = "recall_contains"
+	AssertFileAbsent          = "file_absent"
+
+	AssertWorkingTopicContains           = "working_topic_contains"
+	AssertWorkingFocusTaskEquals         = "working_focus_task_equals"
+	AssertWorkingPendingQuestionContains = "working_pending_question_contains"
+	AssertWorkingPendingActionContains   = "working_pending_action_contains"
+	AssertDurableCardCount               = "durable_card_count"
+	AssertDurableCardContains            = "durable_card_contains"
+	AssertDurableCardStatus              = "durable_card_status"
+	AssertDurableCardConfidenceRange     = "durable_card_confidence_range"
+	AssertDurableCardScope               = "durable_card_scope"
+	AssertDurableCardSupersedes          = "durable_card_supersedes"
+	AssertEdgeExists                     = "edge_exists"
+	AssertRecallNotContains              = "recall_not_contains"
+	AssertProcedureCount                 = "procedure_count"
+	AssertProcedureContains              = "procedure_contains"
+	AssertProcedureStepContains          = "procedure_step_contains"
 )
 
 type Scenario struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
+	Lane        string      `json:"lane,omitempty"`
 	Tags        []string    `json:"tags,omitempty"`
 	Fixtures    Fixtures    `json:"fixtures,omitempty"`
 	Steps       []Step      `json:"steps"`
@@ -58,23 +79,26 @@ type Step struct {
 }
 
 type Assertion struct {
-	Type      string `json:"type"`
-	Step      string `json:"step,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	Field     string `json:"field,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Path      string `json:"path,omitempty"`
-	Equals    string `json:"equals,omitempty"`
-	Contains  string `json:"contains,omitempty"`
-	Query     string `json:"query,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Expected  int    `json:"expected,omitempty"`
-	Min       int    `json:"min,omitempty"`
+	Type          string  `json:"type"`
+	Step          string  `json:"step,omitempty"`
+	SessionID     string  `json:"session_id,omitempty"`
+	Field         string  `json:"field,omitempty"`
+	Status        string  `json:"status,omitempty"`
+	Path          string  `json:"path,omitempty"`
+	Equals        string  `json:"equals,omitempty"`
+	Contains      string  `json:"contains,omitempty"`
+	Query         string  `json:"query,omitempty"`
+	Source        string  `json:"source,omitempty"`
+	Expected      int     `json:"expected,omitempty"`
+	Min           int     `json:"min,omitempty"`
+	MinConfidence float64 `json:"min_confidence,omitempty"`
+	MaxConfidence float64 `json:"max_confidence,omitempty"`
 }
 
 type RunReport struct {
 	ScenarioName        string            `json:"scenario_name"`
 	ScenarioDescription string            `json:"scenario_description,omitempty"`
+	ScenarioLane        string            `json:"scenario_lane,omitempty"`
 	ScenarioTags        []string          `json:"scenario_tags,omitempty"`
 	ScenarioPath        string            `json:"scenario_path"`
 	RunDir              string            `json:"run_dir"`

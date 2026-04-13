@@ -52,6 +52,9 @@ func (s *Service) Recall(req Request) Response {
 
 	hits := make([]Hit, 0)
 	for _, card := range s.store.LatestCards() {
+		if !memory.IsRecallEligibleStatus(card.Status) {
+			continue
+		}
 		source, ok := sourceForCardType(card.CardType)
 		if !ok {
 			continue
@@ -103,6 +106,8 @@ func sourceForCardType(cardType string) (string, bool) {
 		return "email", true
 	case "github_issue_search", "github_issue_summary", "github_issue":
 		return "github", true
+	case "procedure":
+		return "procedure", true
 	default:
 		return "", false
 	}
@@ -150,6 +155,8 @@ func baseWeight(cardType string) float64 {
 		return 3.5
 	case "web_result", "email_message", "github_issue":
 		return 3
+	case "procedure":
+		return 3.8
 	case "web_search", "email_inbox", "github_issue_search":
 		return 2
 	default:

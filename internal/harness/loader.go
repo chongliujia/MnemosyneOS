@@ -26,6 +26,7 @@ func LoadScenario(path string) (Scenario, error) {
 	if strings.TrimSpace(scenario.Name) == "" {
 		scenario.Name = filepath.Base(scenario.Dir)
 	}
+	scenario.Lane = NormalizeLane(scenario.Lane)
 	if len(scenario.Steps) == 0 {
 		return Scenario{}, fmt.Errorf("scenario %q has no steps", scenario.Name)
 	}
@@ -57,6 +58,16 @@ func LoadScenario(path string) (Scenario, error) {
 		seen[scenario.Steps[i].ID] = struct{}{}
 	}
 	return scenario, nil
+}
+
+func NormalizeLane(lane string) string {
+	lane = strings.ToLower(strings.TrimSpace(lane))
+	switch lane {
+	case "", "smoke", "regression", "soak":
+		return lane
+	default:
+		return lane
+	}
 }
 
 func resolveScenarioFile(path string) (string, error) {
@@ -132,6 +143,27 @@ func FilterScenarioPathsByTags(paths []string, tags []string) ([]string, error) 
 	}
 	if len(filtered) == 0 {
 		return nil, fmt.Errorf("no scenarios matched tags %v", tags)
+	}
+	return filtered, nil
+}
+
+func FilterScenarioPathsByLane(paths []string, lane string) ([]string, error) {
+	lane = NormalizeLane(lane)
+	if lane == "" {
+		return paths, nil
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		scenario, err := LoadScenario(path)
+		if err != nil {
+			return nil, err
+		}
+		if scenario.Lane == lane {
+			filtered = append(filtered, path)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("no scenarios matched lane %q", lane)
 	}
 	return filtered, nil
 }

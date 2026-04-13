@@ -1,0 +1,104 @@
+{
+  "name": "memory_write_recall_roundtrip",
+  "description": "Ensure a web search writes durable memory cards and that recall can retrieve the written knowledge.",
+  "tags": [
+    "memory",
+    "connector",
+    "web",
+    "recall",
+    "roundtrip"
+  ],
+  "fixtures": {
+    "search_response_file": "fixtures/search_response.json"
+  },
+  "steps": [
+    {
+      "id": "submit_search",
+      "type": "submit_task",
+      "title": "Search OpenClaw memory design",
+      "goal": "Search the web for OpenClaw memory design",
+      "selected_skill": "web-search",
+      "metadata": {
+        "query": "OpenClaw memory design"
+      }
+    },
+    {
+      "id": "run_search",
+      "type": "run_task",
+      "task_ref": "submit_search"
+    },
+    {
+      "id": "promote_search_candidates",
+      "type": "consolidate_memory",
+      "metadata": {
+        "card_type": "web_result",
+        "scope": "project"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_search",
+      "equals": "done"
+    },
+    {
+      "type": "selected_skill",
+      "step": "run_search",
+      "equals": "web-search"
+    },
+    {
+      "type": "artifact_count",
+      "step": "run_search",
+      "min": 1
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_search",
+      "contains": "hybrid retrieval"
+    },
+    {
+      "type": "durable_card_count",
+      "field": "search_summary",
+      "min": 1
+    },
+    {
+      "type": "durable_card_count",
+      "field": "web_result",
+      "min": 3
+    },
+    {
+      "type": "durable_card_contains",
+      "field": "search_summary",
+      "contains": "OpenClaw"
+    },
+    {
+      "type": "durable_card_confidence_range",
+      "field": "search_summary",
+      "min_confidence": 0.7,
+      "max_confidence": 1.0
+    },
+    {
+      "type": "durable_card_scope",
+      "field": "search_summary",
+      "equals": "project"
+    },
+    {
+      "type": "edge_count",
+      "field": "search_result",
+      "min": 3
+    },
+    {
+      "type": "edge_exists",
+      "field": "search_summary",
+      "contains": "search:"
+    },
+    {
+      "type": "recall_contains",
+      "query": "OpenClaw temporal ranking",
+      "source": "web",
+      "contains": "temporal decay"
+    }
+  ],
+  "lane": "regression"
+}

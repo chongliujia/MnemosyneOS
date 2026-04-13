@@ -1,7 +1,10 @@
 {
   "name": "file_read_roundtrip",
   "description": "Write a workspace file through the execution plane, then read it back as an artifact.",
-  "tags": ["execution", "filesystem"],
+  "tags": [
+    "execution",
+    "filesystem"
+  ],
   "steps": [
     {
       "id": "submit_file_edit",
@@ -66,5 +69,6 @@
       "path": "workspace/notes/harness-roundtrip.txt",
       "contains": "notify operators"
     }
-  ]
+  ],
+  "lane": "smoke"
 }

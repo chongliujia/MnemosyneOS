@@ -20,6 +20,11 @@ import (
 	"mnemosyneos/internal/model"
 )
 
+const (
+	memoryScopeProject = "project"
+	memoryScopeUser    = "user"
+)
+
 type RunResult struct {
 	Task             airuntime.Task          `json:"task"`
 	Action           *execution.ActionRecord `json:"action,omitempty"`
@@ -35,6 +40,7 @@ type ProgressEvent struct {
 type Runner struct {
 	runtimeStore *airuntime.Store
 	memoryStore  *memory.Store
+	consolidator *memory.Consolidator
 	executor     *execution.Executor
 	connectors   *connectors.Runtime
 	approvals    *approval.Store
@@ -45,6 +51,7 @@ func NewRunner(runtimeStore *airuntime.Store, memoryStore *memory.Store, executo
 	return &Runner{
 		runtimeStore: runtimeStore,
 		memoryStore:  memoryStore,
+		consolidator: memory.NewConsolidator(memoryStore),
 		executor:     executor,
 		connectors:   connectorRuntime,
 		approvals:    approvalStore,
@@ -548,9 +555,24 @@ func (r *Runner) runEmailInbox(task airuntime.Task, onProgress func(ProgressEven
 }
 
 func (r *Runner) runMemoryConsolidate(task airuntime.Task, onProgress func(ProgressEvent)) (RunResult, error) {
+	if parseBool(task.Metadata["extract_procedures"]) {
+		emitProgress(onProgress, "consolidate.procedures", "Extracting procedural candidates from successful task runs...")
+		if err := r.extractProcedureCandidates(task); err != nil {
+			return RunResult{}, err
+		}
+	}
+	emitProgress(onProgress, "consolidate.replay", "Reviewing candidate memories for promotion...")
+	consolidationResult, err := r.consolidator.PromoteCandidates(memory.ConsolidateRequest{
+		CardType: strings.TrimSpace(task.Metadata["card_type"]),
+		Scope:    strings.TrimSpace(task.Metadata["scope"]),
+	})
+	if err != nil {
+		return RunResult{}, err
+	}
 	emitProgress(onProgress, "consolidate.generate", "Generating the memory summary...")
 	now := time.Now().UTC()
 	body, modelResp, modelErr := r.generateMemorySummary(task, now)
+	body = fmt.Sprintf("%s\nPromoted candidates: %d\nExamined candidates: %d\n", body, consolidationResult.Promoted, consolidationResult.Examined)
 	emitProgress(onProgress, "persist.artifacts", "Writing the memory artifact and observation...")
 	artifactPath, err := r.writeArtifact("reports", task.TaskID+"-memory.md", body)
 	if err != nil {
@@ -563,6 +585,9 @@ func (r *Runner) runMemoryConsolidate(task airuntime.Task, onProgress func(Progr
 		"model_provider": modelResp.Provider,
 		"model_name":     modelResp.Model,
 		"model_error":    errorString(modelErr),
+		"examined":       consolidationResult.Examined,
+		"promoted":       consolidationResult.Promoted,
+		"promoted_cards": consolidationResult.PromotedCards,
 		"artifact_path":  artifactPath,
 	})
 	if err != nil {
@@ -580,6 +605,27 @@ func (r *Runner) runMemoryConsolidate(task airuntime.Task, onProgress func(Progr
 		return RunResult{}, err
 	}
 	return RunResult{Task: updated, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
+}
+
+func (r *Runner) extractProcedureCandidates(task airuntime.Task) error {
+	tasks, err := r.runtimeStore.ListTasks()
+	if err != nil {
+		return err
+	}
+	minRuns := parseInt(task.Metadata["min_runs"], 2)
+	candidates, _ := memory.BuildProcedureCandidates(memory.ProcedureExtractionRequest{
+		Tasks:         tasks,
+		TaskClass:     strings.TrimSpace(task.Metadata["task_class"]),
+		SelectedSkill: strings.TrimSpace(task.Metadata["selected_skill"]),
+		Scope:         firstNonEmpty(strings.TrimSpace(task.Metadata["scope"]), memoryScopeProject),
+		MinRuns:       minRuns,
+	})
+	for _, candidate := range candidates {
+		if _, err := r.memoryStore.CreateCard(candidate); err != nil && !errors.Is(err, memory.ErrAlreadyExists) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Runner) blockTask(task airuntime.Task, reason string) (RunResult, error) {
@@ -662,6 +708,27 @@ func emitProgress(onProgress func(ProgressEvent), stage, message string) {
 		Stage:   strings.TrimSpace(stage),
 		Message: strings.TrimSpace(message),
 	})
+}
+
+func parseBool(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseInt(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	var parsed int
+	if _, err := fmt.Sscanf(raw, "%d", &parsed); err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func firstNonEmpty(values ...string) string {
@@ -776,6 +843,7 @@ func (r *Runner) persistWebSearchMemory(task airuntime.Task, resp connectors.Sea
 	if err := upsertCard(r.memoryStore, rootCardID, memory.CreateCardRequest{
 		CardID:   rootCardID,
 		CardType: "web_search",
+		Scope:    memoryScopeProject,
 		Content:  rootContent,
 		Provenance: memory.Provenance{
 			AgentID:    "skills.web-search",
@@ -788,6 +856,7 @@ func (r *Runner) persistWebSearchMemory(task airuntime.Task, resp connectors.Sea
 	if err := upsertCard(r.memoryStore, summaryCardID, memory.CreateCardRequest{
 		CardID:   summaryCardID,
 		CardType: "search_summary",
+		Scope:    memoryScopeProject,
 		Content: map[string]any{
 			"task_id":   task.TaskID,
 			"query":     resp.Query,
@@ -836,6 +905,8 @@ func (r *Runner) persistWebSearchMemory(task airuntime.Task, resp connectors.Sea
 		if err := upsertCard(r.memoryStore, resultCardID, memory.CreateCardRequest{
 			CardID:   resultCardID,
 			CardType: "web_result",
+			Scope:    memoryScopeProject,
+			Status:   memory.CardStatusCandidate,
 			Content:  resultContent,
 			Provenance: memory.Provenance{
 				AgentID:    "skills.web-search",
@@ -890,6 +961,7 @@ func (r *Runner) persistGitHubIssueMemory(task airuntime.Task, resp connectors.G
 	if err := upsertCard(r.memoryStore, rootCardID, memory.CreateCardRequest{
 		CardID:   rootCardID,
 		CardType: "github_issue_search",
+		Scope:    memoryScopeProject,
 		Content:  rootContent,
 		Provenance: memory.Provenance{
 			AgentID:    "skills.github-issue-search",
@@ -902,6 +974,7 @@ func (r *Runner) persistGitHubIssueMemory(task airuntime.Task, resp connectors.G
 	if err := upsertCard(r.memoryStore, summaryCardID, memory.CreateCardRequest{
 		CardID:   summaryCardID,
 		CardType: "github_issue_summary",
+		Scope:    memoryScopeProject,
 		Content: map[string]any{
 			"task_id":   task.TaskID,
 			"query":     resp.Query,
@@ -952,6 +1025,8 @@ func (r *Runner) persistGitHubIssueMemory(task airuntime.Task, resp connectors.G
 		if err := upsertCard(r.memoryStore, issueCardID, memory.CreateCardRequest{
 			CardID:   issueCardID,
 			CardType: "github_issue",
+			Scope:    memoryScopeProject,
+			Status:   memory.CardStatusCandidate,
 			Content:  issueContent,
 			Provenance: memory.Provenance{
 				AgentID:    "skills.github-issue-search",
@@ -1007,6 +1082,7 @@ func (r *Runner) persistEmailMemory(task airuntime.Task, resp connectors.EmailRe
 	if err := upsertCard(r.memoryStore, rootCardID, memory.CreateCardRequest{
 		CardID:   rootCardID,
 		CardType: "email_inbox",
+		Scope:    memoryScopeUser,
 		Content:  rootContent,
 		Provenance: memory.Provenance{
 			AgentID:    "skills.email-inbox",
@@ -1019,6 +1095,7 @@ func (r *Runner) persistEmailMemory(task airuntime.Task, resp connectors.EmailRe
 	if err := upsertCard(r.memoryStore, summaryCardID, memory.CreateCardRequest{
 		CardID:   summaryCardID,
 		CardType: "email_summary",
+		Scope:    memoryScopeUser,
 		Content: map[string]any{
 			"task_id":   task.TaskID,
 			"query":     resp.Query,
@@ -1068,6 +1145,8 @@ func (r *Runner) persistEmailMemory(task airuntime.Task, resp connectors.EmailRe
 		if err := upsertCard(r.memoryStore, threadCardID, memory.CreateCardRequest{
 			CardID:   threadCardID,
 			CardType: "email_thread",
+			Scope:    memoryScopeUser,
+			Status:   memory.CardStatusCandidate,
 			Content:  threadContent,
 			Provenance: memory.Provenance{
 				AgentID:    "skills.email-inbox",
@@ -1119,6 +1198,8 @@ func (r *Runner) persistEmailMemory(task airuntime.Task, resp connectors.EmailRe
 		if err := upsertCard(r.memoryStore, messageCardID, memory.CreateCardRequest{
 			CardID:   messageCardID,
 			CardType: "email_message",
+			Scope:    memoryScopeUser,
+			Status:   memory.CardStatusCandidate,
 			Content:  messageContent,
 			Provenance: memory.Provenance{
 				AgentID:    "skills.email-inbox",
@@ -1267,11 +1348,17 @@ func upsertCard(store *memory.Store, cardID string, req memory.CreateCardRequest
 		return err
 	}
 
+	status := req.Status
+	if status == "" {
+		status = memory.CardStatusActive
+	}
 	_, err := store.UpdateCard(cardID, memory.UpdateCardRequest{
 		Content:      req.Content,
+		Scope:        req.Scope,
 		EvidenceRefs: req.EvidenceRefs,
 		Provenance:   req.Provenance,
-		Status:       "active",
+		Status:       status,
+		Supersedes:   req.Supersedes,
 	})
 	return err
 }

@@ -2,15 +2,30 @@ package memory
 
 import "time"
 
+const (
+	ScopeSession = "session"
+	ScopeUser    = "user"
+	ScopeProject = "project"
+	ScopeArchive = "archive"
+
+	CardStatusCandidate  = "candidate"
+	CardStatusActive     = "active"
+	CardStatusStale      = "stale"
+	CardStatusSuperseded = "superseded"
+	CardStatusArchived   = "archived"
+)
+
 type Card struct {
 	CardID       string          `json:"card_id"`
 	CardType     string          `json:"card_type"`
+	Scope        string          `json:"scope,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	ValidFrom    *time.Time      `json:"valid_from,omitempty"`
 	ValidTo      *time.Time      `json:"valid_to,omitempty"`
 	Version      int             `json:"version"`
 	PrevVersion  string          `json:"prev_version_id,omitempty"`
 	Status       string          `json:"status"`
+	Supersedes   string          `json:"supersedes,omitempty"`
 	Content      map[string]any  `json:"content"`
 	EvidenceRefs []EvidenceRef   `json:"evidence_refs,omitempty"`
 	Provenance   Provenance      `json:"provenance"`
@@ -51,6 +66,9 @@ type Edge struct {
 type CreateCardRequest struct {
 	CardID       string         `json:"card_id"`
 	CardType     string         `json:"card_type"`
+	Scope        string         `json:"scope,omitempty"`
+	Status       string         `json:"status,omitempty"`
+	Supersedes   string         `json:"supersedes,omitempty"`
 	ValidFrom    *time.Time     `json:"valid_from,omitempty"`
 	ValidTo      *time.Time     `json:"valid_to,omitempty"`
 	Content      map[string]any `json:"content"`
@@ -60,9 +78,11 @@ type CreateCardRequest struct {
 
 type UpdateCardRequest struct {
 	Content      map[string]any `json:"content"`
+	Scope        string         `json:"scope,omitempty"`
 	ValidFrom    *time.Time     `json:"valid_from,omitempty"`
 	ValidTo      *time.Time     `json:"valid_to,omitempty"`
 	Status       string         `json:"status,omitempty"`
+	Supersedes   string         `json:"supersedes,omitempty"`
 	EvidenceRefs []EvidenceRef  `json:"evidence_refs,omitempty"`
 	Provenance   Provenance     `json:"provenance"`
 }
@@ -82,10 +102,27 @@ type CreateEdgeRequest struct {
 type QueryRequest struct {
 	CardID   string     `json:"card_id,omitempty"`
 	CardType string     `json:"card_type,omitempty"`
+	Scope    string     `json:"scope,omitempty"`
+	Status   string     `json:"status,omitempty"`
 	AsOf     *time.Time `json:"as_of,omitempty"`
 }
 
 type QueryResponse struct {
 	Cards []Card `json:"cards"`
 	Edges []Edge `json:"edges,omitempty"`
+}
+
+func NormalizeCardStatus(status string) string {
+	switch status {
+	case CardStatusCandidate, CardStatusActive, CardStatusStale, CardStatusSuperseded, CardStatusArchived:
+		return status
+	case "":
+		return CardStatusActive
+	default:
+		return ""
+	}
+}
+
+func IsRecallEligibleStatus(status string) bool {
+	return NormalizeCardStatus(status) == CardStatusActive
 }

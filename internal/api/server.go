@@ -346,6 +346,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	req := memory.QueryRequest{
 		CardID:   r.URL.Query().Get("card_id"),
 		CardType: r.URL.Query().Get("card_type"),
+		Scope:    r.URL.Query().Get("scope"),
 	}
 
 	if asOfText := r.URL.Query().Get("as_of"); asOfText != "" {

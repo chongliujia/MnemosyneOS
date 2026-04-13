@@ -14,21 +14,23 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 	root := t.TempDir()
 	reportA := RunReport{
 		ScenarioName:     "email_inbox_summary",
+		ScenarioLane:     "regression",
 		ScenarioTags:     []string{"email", "memory"},
 		RunDir:           root + "/run-a",
 		StartedAt:        time.Now().UTC(),
 		FinishedAt:       time.Now().UTC().Add(10 * time.Millisecond),
 		Passed:           true,
-		AssertionResults: []AssertionResult{{Type: AssertTaskState, Passed: true}},
+		AssertionResults: []AssertionResult{{Type: AssertDurableCardCount, Passed: true}, {Type: AssertProcedureCount, Passed: true}},
 	}
 	reportB := RunReport{
 		ScenarioName:     "email_inbox_summary",
+		ScenarioLane:     "regression",
 		ScenarioTags:     []string{"email", "memory"},
 		RunDir:           root + "/run-b",
 		StartedAt:        time.Now().UTC(),
 		FinishedAt:       time.Now().UTC().Add(20 * time.Millisecond),
 		Passed:           false,
-		AssertionResults: []AssertionResult{{Type: AssertTaskState, Passed: false, Details: "task_state mismatch"}},
+		AssertionResults: []AssertionResult{{Type: AssertRecallContains, Passed: false, Details: "recall mismatch"}},
 		Error:            "failed",
 	}
 	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
@@ -57,6 +59,9 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 	if rollup.ScenarioResults[0].FailedAssertions != 1 {
 		t.Fatalf("expected failed assertions to be counted, got %+v", rollup.ScenarioResults[0])
 	}
+	if rollup.ScenarioResults[0].DurableAssertions != 1 || rollup.ScenarioResults[0].ProcedureAssertions != 1 || rollup.ScenarioResults[0].RecallAssertions != 1 || rollup.ScenarioResults[0].MemoryFailures != 1 {
+		t.Fatalf("expected memory assertion counters to be tracked, got %+v", rollup.ScenarioResults[0])
+	}
 }
 
 func TestBuildRollupWithTagsFiltersReports(t *testing.T) {
@@ -64,8 +69,8 @@ func TestBuildRollupWithTagsFiltersReports(t *testing.T) {
 
 	root := t.TempDir()
 	reports := []RunReport{
-		{ScenarioName: "chat_followup_continuity", ScenarioTags: []string{"chat", "memory"}, RunDir: filepath.Join(root, "run-chat"), StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC().Add(5 * time.Millisecond), Passed: true},
-		{ScenarioName: "root_approval_flow", ScenarioTags: []string{"approval", "execution"}, RunDir: filepath.Join(root, "run-root"), StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC().Add(7 * time.Millisecond), Passed: true},
+		{ScenarioName: "chat_followup_continuity", ScenarioLane: "smoke", ScenarioTags: []string{"chat", "memory"}, RunDir: filepath.Join(root, "run-chat"), StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC().Add(5 * time.Millisecond), Passed: true},
+		{ScenarioName: "root_approval_flow", ScenarioLane: "smoke", ScenarioTags: []string{"approval", "execution"}, RunDir: filepath.Join(root, "run-root"), StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC().Add(7 * time.Millisecond), Passed: true},
 	}
 	for i, report := range reports {
 		dir := filepath.Join(root, string(rune('a'+i)))
@@ -93,6 +98,7 @@ func TestSaveAndCheckBaselineWithTags(t *testing.T) {
 	baselineRoot := t.TempDir()
 	report := RunReport{
 		ScenarioName: "email_inbox_summary",
+		ScenarioLane: "regression",
 		ScenarioTags: []string{"email", "memory"},
 		RunDir:       filepath.Join(runsRoot, "run-email"),
 		StartedAt:    time.Now().UTC(),
@@ -121,6 +127,33 @@ func TestSaveAndCheckBaselineWithTags(t *testing.T) {
 	}
 	if !result.Passed || result.Compared != 1 {
 		t.Fatalf("unexpected baseline result: %+v", result)
+	}
+}
+
+func TestBuildRollupWithScopeFiltersByLane(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	reports := []RunReport{
+		{ScenarioName: "chat_followup_continuity", ScenarioLane: "smoke", ScenarioTags: []string{"chat", "memory"}, RunDir: filepath.Join(root, "run-chat"), StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC().Add(5 * time.Millisecond), Passed: true},
+		{ScenarioName: "email_inbox_summary", ScenarioLane: "regression", ScenarioTags: []string{"email", "memory"}, RunDir: filepath.Join(root, "run-email"), StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC().Add(7 * time.Millisecond), Passed: true},
+	}
+	for i, report := range reports {
+		dir := filepath.Join(root, string(rune('a'+i)))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeJSON(filepath.Join(dir, "report.json"), report); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rollup, err := BuildRollupWithScope(root, []string{"memory"}, "regression")
+	if err != nil {
+		t.Fatalf("BuildRollupWithScope returned error: %v", err)
+	}
+	if rollup.RunCount != 1 || len(rollup.ScenarioResults) != 1 || rollup.ScenarioResults[0].ScenarioName != "email_inbox_summary" {
+		t.Fatalf("unexpected scoped rollup: %+v", rollup)
 	}
 }
 

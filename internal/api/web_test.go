@@ -177,6 +177,49 @@ func TestChatPageSendsMessage(t *testing.T) {
 	}
 }
 
+func TestQueryAPIHonorsScopeFilter(t *testing.T) {
+	handler, _, _, memoryStore, _, _, _, _ := newWebTestServer(t)
+
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "search:test:summary",
+		CardType: "search_summary",
+		Scope:    memory.ScopeProject,
+		Content: map[string]any{
+			"summary": "Project-scoped search memory",
+		},
+	}); err != nil {
+		t.Fatalf("CreateCard project returned error: %v", err)
+	}
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "email:test:summary",
+		CardType: "email_summary",
+		Scope:    memory.ScopeUser,
+		Content: map[string]any{
+			"summary": "User-scoped email memory",
+		},
+	}); err != nil {
+		t.Fatalf("CreateCard user returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/query?scope=project", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp memory.QueryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal query response: %v", err)
+	}
+	if len(resp.Cards) != 1 {
+		t.Fatalf("expected one project-scoped card, got %d", len(resp.Cards))
+	}
+	if resp.Cards[0].Scope != memory.ScopeProject {
+		t.Fatalf("expected project scope, got %q", resp.Cards[0].Scope)
+	}
+}
+
 func TestChatPageRendersSessionState(t *testing.T) {
 	handler, _, _, _, _, _, _, chatStore := newWebTestServer(t)
 

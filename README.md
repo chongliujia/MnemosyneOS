@@ -137,12 +137,17 @@ Current pages:
 go run ./cmd/mnemosyne-harness
 go run ./cmd/mnemosyne-harness -scenario ./scenarios/email_inbox_summary
 go run ./cmd/mnemosyne-harness -tags chat,memory
+go run ./cmd/mnemosyne-harness -lane smoke
+go run ./cmd/mnemosyne-harness -lane regression -tags memory
 go run ./cmd/mnemosyne-harness -report-a ./runs/<run-a> -report-b ./runs/<run-b>
 go run ./cmd/mnemosyne-harness -rollup ./runs
+go run ./cmd/mnemosyne-harness -rollup ./runs -lane regression
 go run ./cmd/mnemosyne-harness -save-baseline ./runs -baseline-dir ./baselines/harness
 go run ./cmd/mnemosyne-harness -save-baseline ./runs -baseline-dir ./baselines/harness -tags execution
+go run ./cmd/mnemosyne-harness -save-baseline ./runs -baseline-dir ./baselines/harness -lane smoke
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -tags email
+go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -lane regression
 ```
 
 Current non-GitHub baseline scenarios:
@@ -154,6 +159,10 @@ Current non-GitHub baseline scenarios:
 - `email_followup_continuity`
 - `file_read_roundtrip`
 - `shell_failure_observability`
+- `working_memory_followup`
+- `memory_write_recall_roundtrip`
+- `approval_memory_boundary`
+- `session_recovery_continuity`
 
 Model settings:
 
@@ -197,9 +206,17 @@ Current root approval MVP behavior:
 
 ### 6) Project references
 
+- Getting started: [`GETTING_STARTED.md`](./GETTING_STARTED.md)
+- Project direction: [`PROJECT_DIRECTION.md`](./PROJECT_DIRECTION.md)
 - Architecture: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
 - Tech stack decisions: [`TECH_STACK.md`](./TECH_STACK.md)
 - Test strategy: [`TEST_STRATEGY.md`](./TEST_STRATEGY.md)
+- Harness architecture: [`HARNESS_ARCHITECTURE.md`](./HARNESS_ARCHITECTURE.md)
+- Memory architecture: [`docs/memory/MEMORY_ARCHITECTURE.md`](./docs/memory/MEMORY_ARCHITECTURE.md)
+- Memory strategy: [`docs/memory/MEMORY_STRATEGY.md`](./docs/memory/MEMORY_STRATEGY.md)
+- Working memory spec: [`docs/memory/WORKING_MEMORY_SPEC.md`](./docs/memory/WORKING_MEMORY_SPEC.md)
+- Memory orchestration spec: [`docs/memory/MEMORY_ORCHESTRATION_SPEC.md`](./docs/memory/MEMORY_ORCHESTRATION_SPEC.md)
+- Memory consolidation spec: [`docs/memory/MEMORY_CONSOLIDATION_SPEC.md`](./docs/memory/MEMORY_CONSOLIDATION_SPEC.md)
 - AI user runtime: [`AI_USER_RUNTIME.md`](./AI_USER_RUNTIME.md)
 - Skill system: [`SKILL_SYSTEM.md`](./SKILL_SYSTEM.md)
 - Interfaces: [`INTERFACES.md`](./INTERFACES.md)

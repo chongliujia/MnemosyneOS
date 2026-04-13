@@ -1,7 +1,11 @@
 {
   "name": "email_inbox_summary",
   "description": "Run a fixture-backed inbox scan and assert artifact and observation output.",
-  "tags": ["email", "memory", "connector"],
+  "tags": [
+    "email",
+    "memory",
+    "connector"
+  ],
   "fixtures": {
     "email_response_file": "fixtures/email_response.json"
   },
@@ -20,6 +24,13 @@
       "id": "run_email",
       "type": "run_task",
       "task_ref": "submit_email"
+    },
+    {
+      "id": "promote_email_candidates",
+      "type": "consolidate_memory",
+      "metadata": {
+        "scope": "user"
+      }
     }
   ],
   "assertions": [
@@ -79,5 +90,6 @@
       "source": "email",
       "contains": "prod.example.internal"
     }
-  ]
+  ],
+  "lane": "regression"
 }

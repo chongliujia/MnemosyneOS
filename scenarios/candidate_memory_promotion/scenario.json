@@ -1,0 +1,64 @@
+{
+  "name": "candidate_memory_promotion",
+  "description": "Ensure candidate web result memories can be promoted into active durable facts through explicit consolidation.",
+  "lane": "regression",
+  "tags": [
+    "memory",
+    "consolidation",
+    "web",
+    "connector"
+  ],
+  "fixtures": {
+    "search_response_file": "fixtures/search_response.json"
+  },
+  "steps": [
+    {
+      "id": "submit_search",
+      "type": "submit_task",
+      "title": "Search OpenClaw memory design",
+      "goal": "Search the web for OpenClaw memory design",
+      "selected_skill": "web-search",
+      "metadata": {
+        "query": "OpenClaw memory design"
+      }
+    },
+    {
+      "id": "run_search",
+      "type": "run_task",
+      "task_ref": "submit_search"
+    },
+    {
+      "id": "promote_search_candidates",
+      "type": "consolidate_memory",
+      "metadata": {
+        "card_type": "web_result",
+        "scope": "project"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_search",
+      "equals": "done"
+    },
+    {
+      "type": "durable_card_status",
+      "field": "web_result",
+      "contains": "full memory body only when needed",
+      "equals": "active"
+    },
+    {
+      "type": "durable_card_scope",
+      "field": "web_result",
+      "contains": "full memory body only when needed",
+      "equals": "project"
+    },
+    {
+      "type": "recall_contains",
+      "query": "full memory body only when needed",
+      "source": "web",
+      "contains": "full memory body only when needed"
+    }
+  ]
+}

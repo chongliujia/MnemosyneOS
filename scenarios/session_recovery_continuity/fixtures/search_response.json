@@ -1,0 +1,21 @@
+{
+  "provider": "fixture-web",
+  "query": "OpenClaw memory design",
+  "results": [
+    {
+      "title": "OpenClaw Memory Architecture",
+      "url": "https://example.com/openclaw-memory-architecture",
+      "snippet": "OpenClaw memory design uses progressive disclosure with a durable markdown memory layer and hybrid retrieval."
+    },
+    {
+      "title": "OpenClaw Temporal Retrieval Notes",
+      "url": "https://example.com/openclaw-temporal-ranking",
+      "snippet": "Temporal decay and hybrid ranking are used to surface recent context while retaining durable facts."
+    },
+    {
+      "title": "OpenClaw Memory Flush",
+      "url": "https://example.com/openclaw-memory-flush",
+      "snippet": "A memory flush step consolidates relevant findings into a durable summary for later recall."
+    }
+  ]
+}

@@ -1,7 +1,11 @@
 {
   "name": "web_search_summary",
   "description": "Run a fixture-backed web search task and assert artifact output.",
-  "tags": ["web", "memory", "connector"],
+  "tags": [
+    "web",
+    "memory",
+    "connector"
+  ],
   "fixtures": {
     "search_response_file": "fixtures/search_response.json"
   },
@@ -48,5 +52,6 @@
       "step": "run_search",
       "contains": "hybrid retrieval"
     }
-  ]
+  ],
+  "lane": "smoke"
 }

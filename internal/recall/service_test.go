@@ -81,6 +81,61 @@ func TestRecallFiltersBySource(t *testing.T) {
 	}
 }
 
+func TestRecallSkipsCandidateCards(t *testing.T) {
+	store := memory.NewStore()
+	mustCreateCard(t, store, memory.CreateCardRequest{
+		CardID:   "search:1:summary",
+		CardType: "search_summary",
+		Status:   memory.CardStatusActive,
+		Content:  map[string]any{"summary": "stable summary"},
+	})
+	mustCreateCard(t, store, memory.CreateCardRequest{
+		CardID:   "web:1",
+		CardType: "web_result",
+		Status:   memory.CardStatusCandidate,
+		Content:  map[string]any{"snippet": "candidate-only detail"},
+	})
+
+	service := NewService(store)
+	resp := service.Recall(Request{
+		Query: "candidate-only detail",
+		Limit: 10,
+	})
+	if len(resp.Hits) != 0 {
+		t.Fatalf("expected candidate card to be excluded from recall, got %d hits", len(resp.Hits))
+	}
+}
+
+func TestRecallIncludesActiveProcedures(t *testing.T) {
+	store := memory.NewStore()
+	mustCreateCard(t, store, memory.CreateCardRequest{
+		CardID:   "procedure:expense_audit:v1",
+		CardType: "procedure",
+		Status:   memory.CardStatusActive,
+		Content: map[string]any{
+			"name":    "expense_audit_v1",
+			"summary": "Audit reimbursements with explicit policy validation.",
+			"steps":   "extract_fields\nvalidate_policy\nflag_missing_evidence",
+		},
+	})
+
+	service := NewService(store)
+	resp := service.Recall(Request{
+		Query:   "expense audit validate policy",
+		Sources: []string{"procedure"},
+		Limit:   10,
+	})
+	if len(resp.Hits) != 1 {
+		t.Fatalf("expected 1 procedure hit, got %d", len(resp.Hits))
+	}
+	if resp.Hits[0].Source != "procedure" {
+		t.Fatalf("expected procedure source, got %s", resp.Hits[0].Source)
+	}
+	if resp.Hits[0].CardID != "procedure:expense_audit:v1" {
+		t.Fatalf("unexpected procedure hit: %+v", resp.Hits[0])
+	}
+}
+
 func mustCreateCard(t *testing.T, store *memory.Store, req memory.CreateCardRequest) {
 	t.Helper()
 	if _, err := store.CreateCard(req); err != nil {

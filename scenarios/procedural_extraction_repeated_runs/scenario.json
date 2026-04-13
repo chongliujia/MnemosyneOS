@@ -1,0 +1,93 @@
+{
+  "name": "procedural_extraction_repeated_runs",
+  "description": "Ensure repeated successful task runs can be extracted into candidate procedural memory and promoted into active procedures.",
+  "lane": "regression",
+  "tags": [
+    "memory",
+    "procedural",
+    "consolidation",
+    "execution"
+  ],
+  "steps": [
+    {
+      "id": "submit_plan_run_1",
+      "type": "submit_task",
+      "title": "Plan expense audit workflow run 1",
+      "goal": "Create an expense audit workflow plan",
+      "selected_skill": "task-plan",
+      "metadata": {
+        "task_class": "expense_audit",
+        "procedure_steps": "extract_fields\nvalidate_policy\nflag_missing_evidence",
+        "procedure_guardrails": "never invent invoice ids\nrequest clarification when tax data is missing",
+        "procedure_summary": "Audit reimbursements by extracting fields, validating policy, and flagging missing evidence.",
+        "procedure_success_signal": "exceptions enumerated with evidence"
+      }
+    },
+    {
+      "id": "run_plan_1",
+      "type": "run_task",
+      "task_ref": "submit_plan_run_1"
+    },
+    {
+      "id": "submit_plan_run_2",
+      "type": "submit_task",
+      "title": "Plan expense audit workflow run 2",
+      "goal": "Create another expense audit workflow plan",
+      "selected_skill": "task-plan",
+      "metadata": {
+        "task_class": "expense_audit",
+        "procedure_steps": "extract_fields\nvalidate_policy\nflag_missing_evidence",
+        "procedure_guardrails": "never invent invoice ids\nrequest clarification when tax data is missing",
+        "procedure_summary": "Audit reimbursements by extracting fields, validating policy, and flagging missing evidence.",
+        "procedure_success_signal": "exceptions enumerated with evidence"
+      }
+    },
+    {
+      "id": "run_plan_2",
+      "type": "run_task",
+      "task_ref": "submit_plan_run_2"
+    },
+    {
+      "id": "extract_and_promote_procedure",
+      "type": "consolidate_memory",
+      "metadata": {
+        "extract_procedures": "true",
+        "task_class": "expense_audit",
+        "selected_skill": "task-plan",
+        "min_runs": "2",
+        "card_type": "procedure",
+        "scope": "project"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_plan_1",
+      "equals": "done"
+    },
+    {
+      "type": "task_state",
+      "step": "run_plan_2",
+      "equals": "done"
+    },
+    {
+      "type": "procedure_count",
+      "expected": 1
+    },
+    {
+      "type": "procedure_contains",
+      "contains": "expense_audit_task_plan"
+    },
+    {
+      "type": "procedure_step_contains",
+      "contains": "validate_policy"
+    },
+    {
+      "type": "recall_contains",
+      "query": "expense audit validate policy",
+      "source": "procedure",
+      "contains": "validate_policy"
+    }
+  ]
+}

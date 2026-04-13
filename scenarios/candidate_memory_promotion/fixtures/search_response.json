@@ -1,0 +1,21 @@
+{
+  "query": "OpenClaw memory design",
+  "provider": "fixture-search",
+  "results": [
+    {
+      "title": "OpenClaw memory overview",
+      "url": "https://fixtures.local/openclaw/memory-overview",
+      "snippet": "OpenClaw stores memory in durable files, then layers BM25, vectors, and hybrid retrieval on top for recall."
+    },
+    {
+      "title": "OpenClaw temporal ranking notes",
+      "url": "https://fixtures.local/openclaw/temporal-ranking",
+      "snippet": "The design includes temporal decay and recency weighting so newer memory receives higher priority during retrieval."
+    },
+    {
+      "title": "OpenClaw progressive disclosure",
+      "url": "https://fixtures.local/openclaw/progressive-disclosure",
+      "snippet": "The agent first finds candidate memories, then fetches the full memory body only when needed. This keeps prompts smaller."
+    }
+  ]
+}

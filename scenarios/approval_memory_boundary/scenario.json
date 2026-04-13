@@ -1,0 +1,46 @@
+{
+  "name": "approval_memory_boundary",
+  "description": "Ensure a pending root approval does not write the target file or persist a completed execution fact before approval is granted.",
+  "lane": "regression",
+  "tags": [
+    "approval",
+    "execution",
+    "memory",
+    "root"
+  ],
+  "steps": [
+    {
+      "id": "submit_root_pending",
+      "type": "submit_task",
+      "title": "Prepare a root-gated write",
+      "goal": "Write a root-gated file after approval",
+      "execution_profile": "root",
+      "selected_skill": "file-edit",
+      "metadata": {
+        "path": "notes/pending-root-boundary.txt",
+        "content": "should only exist after approval\n"
+      }
+    },
+    {
+      "id": "request_root_boundary_approval",
+      "type": "run_task",
+      "task_ref": "submit_root_pending"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "request_root_boundary_approval",
+      "equals": "awaiting_approval"
+    },
+    {
+      "type": "approval_count",
+      "status": "pending",
+      "expected": 1
+    },
+    {
+      "type": "file_absent",
+      "path": "workspace/notes/pending-root-boundary.txt"
+    }
+  ]
+}

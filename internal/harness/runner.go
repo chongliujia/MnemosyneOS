@@ -3,10 +3,12 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,9 +24,11 @@ import (
 type runtimeEnv struct {
 	runDir         string
 	runtimeRoot    string
+	scenario       Scenario
 	runtimeStore   *airuntime.Store
 	orchestrator   *airuntime.Orchestrator
 	memoryStore    *memory.Store
+	consolidator   *memory.Consolidator
 	approvalStore  *approval.Store
 	executionStore *execution.Store
 	executor       *execution.Executor
@@ -43,6 +47,7 @@ func RunScenario(ctx context.Context, scenario Scenario, outRoot string) (RunRep
 	report := RunReport{
 		ScenarioName:        scenario.Name,
 		ScenarioDescription: scenario.Description,
+		ScenarioLane:        scenario.Lane,
 		ScenarioTags:        append([]string(nil), scenario.Tags...),
 		ScenarioPath:        scenario.Dir,
 		StartedAt:           started,
@@ -137,9 +142,11 @@ func newRuntimeEnv(runDir, runtimeRoot string, scenario Scenario) (*runtimeEnv, 
 	return &runtimeEnv{
 		runDir:         runDir,
 		runtimeRoot:    runtimeRoot,
+		scenario:       scenario,
 		runtimeStore:   runtimeStore,
 		orchestrator:   orchestrator,
 		memoryStore:    memoryStore,
+		consolidator:   memory.NewConsolidator(memoryStore),
 		approvalStore:  approvalStore,
 		executionStore: executionStore,
 		executor:       executor,
@@ -149,6 +156,41 @@ func newRuntimeEnv(runDir, runtimeRoot string, scenario Scenario) (*runtimeEnv, 
 		chatService:    chatService,
 		stepResults:    map[string]StepReport{},
 	}, nil
+}
+
+func (e *runtimeEnv) rebuildServices() error {
+	runtimeStore := airuntime.NewStore(e.runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	memoryStore := memory.NewStore()
+	approvalStore := approval.NewStore(e.runtimeRoot, 10*time.Minute)
+	executionStore := execution.NewStore(e.runtimeRoot)
+	workspaceRoot := filepath.Join(e.runtimeRoot, "workspace")
+	executor, err := execution.NewExecutorWithApprovals(executionStore, workspaceRoot, "", approvalStore)
+	if err != nil {
+		return err
+	}
+	connectorRuntime, err := loadFixtureConnectors(e.scenario)
+	if err != nil {
+		return err
+	}
+	stubModel := stubTextGateway{}
+	skillRunner := skills.NewRunner(runtimeStore, memoryStore, executor, connectorRuntime, approvalStore, stubModel)
+	recallService := recall.NewService(memoryStore)
+	chatStore := chat.NewStore(e.runtimeRoot)
+	chatService := chat.NewService(chatStore, orchestrator, runtimeStore, recallService, skillRunner, stubModel)
+
+	e.runtimeStore = runtimeStore
+	e.orchestrator = orchestrator
+	e.memoryStore = memoryStore
+	e.consolidator = memory.NewConsolidator(memoryStore)
+	e.approvalStore = approvalStore
+	e.executionStore = executionStore
+	e.executor = executor
+	e.skillRunner = skillRunner
+	e.recall = recallService
+	e.chatStore = chatStore
+	e.chatService = chatService
+	return nil
 }
 
 func bootstrapRuntimeRoot(root string) error {
@@ -311,9 +353,139 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 		}
 		return nil
 
+	case StepTypeRestartRuntime:
+		report.Progress = append(report.Progress, StepProgress{
+			Stage:   "runtime.restart",
+			Message: "Rebuilding harness runtime services from the existing runtime root...",
+		})
+		if err := e.rebuildServices(); err != nil {
+			return err
+		}
+		return nil
+
+	case StepTypeConsolidate:
+		limit := 0
+		if raw := strings.TrimSpace(step.Metadata["limit"]); raw != "" {
+			fmt.Sscanf(raw, "%d", &limit)
+		}
+		if parseBool(step.Metadata["extract_procedures"]) {
+			report.Progress = append(report.Progress, StepProgress{
+				Stage:   "memory.extract_procedures",
+				Message: "Extracting procedural candidates from successful task runs...",
+			})
+			if err := e.extractProcedureCandidates(step.Metadata); err != nil {
+				return err
+			}
+		}
+		req := memory.ConsolidateRequest{
+			CardType:         strings.TrimSpace(step.Metadata["card_type"]),
+			Scope:            strings.TrimSpace(step.Metadata["scope"]),
+			Limit:            limit,
+			ArchiveRemaining: parseBool(step.Metadata["archive_remaining"]),
+		}
+		report.Progress = append(report.Progress, StepProgress{
+			Stage:   "memory.consolidate",
+			Message: fmt.Sprintf("Promoting candidate memory card_type=%s scope=%s", firstNonEmpty(req.CardType, "all"), firstNonEmpty(req.Scope, "all")),
+		})
+		result, err := e.consolidator.PromoteCandidates(req)
+		if err != nil {
+			return err
+		}
+		report.ObservationPaths = append(report.ObservationPaths, fmt.Sprintf("examined=%d promoted=%d", result.Examined, result.Promoted))
+		return nil
+
+	case StepTypeSeedMemoryCard:
+		req, err := seedCardRequestFromMetadata(step.Metadata)
+		if err != nil {
+			return err
+		}
+		card, err := e.memoryStore.CreateCard(req)
+		if err != nil {
+			return err
+		}
+		report.Progress = append(report.Progress, StepProgress{
+			Stage:   "memory.seed",
+			Message: fmt.Sprintf("Seeded %s %s status=%s", card.CardType, card.CardID, card.Status),
+		})
+		return nil
+
 	default:
 		return fmt.Errorf("unsupported step type %q", step.Type)
 	}
+}
+
+func seedCardRequestFromMetadata(metadata map[string]string) (memory.CreateCardRequest, error) {
+	cardID := strings.TrimSpace(metadata["card_id"])
+	cardType := strings.TrimSpace(metadata["card_type"])
+	if cardID == "" || cardType == "" {
+		return memory.CreateCardRequest{}, fmt.Errorf("seed_memory_card requires metadata.card_id and metadata.card_type")
+	}
+	req := memory.CreateCardRequest{
+		CardID:     cardID,
+		CardType:   cardType,
+		Scope:      strings.TrimSpace(metadata["scope"]),
+		Status:     strings.TrimSpace(metadata["status"]),
+		Supersedes: strings.TrimSpace(metadata["supersedes"]),
+		Content:    map[string]any{},
+		Provenance: memory.Provenance{
+			AgentID: "harness",
+			Source:  firstNonEmpty(strings.TrimSpace(metadata["source"]), "harness"),
+		},
+	}
+	if raw := strings.TrimSpace(metadata["confidence"]); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return memory.CreateCardRequest{}, fmt.Errorf("invalid confidence %q: %w", raw, err)
+		}
+		req.Provenance.Confidence = value
+	}
+	for key, value := range metadata {
+		if strings.HasPrefix(key, "content.") {
+			req.Content[strings.TrimPrefix(key, "content.")] = value
+		}
+	}
+	return req, nil
+}
+
+func parseBool(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseInt(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func (e *runtimeEnv) extractProcedureCandidates(metadata map[string]string) error {
+	tasks, err := e.runtimeStore.ListTasks()
+	if err != nil {
+		return err
+	}
+	candidates, _ := memory.BuildProcedureCandidates(memory.ProcedureExtractionRequest{
+		Tasks:         tasks,
+		TaskClass:     strings.TrimSpace(metadata["task_class"]),
+		SelectedSkill: strings.TrimSpace(metadata["selected_skill"]),
+		Scope:         firstNonEmpty(strings.TrimSpace(metadata["scope"]), memory.ScopeProject),
+		MinRuns:       parseInt(metadata["min_runs"], 2),
+	})
+	for _, candidate := range candidates {
+		if _, err := e.memoryStore.CreateCard(candidate); err != nil && !errors.Is(err, memory.ErrAlreadyExists) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *runtimeEnv) evaluateAssertions(assertions []Assertion) ([]AssertionResult, bool) {
@@ -435,6 +607,19 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 		}
 		return failAssertion(assertion, fmt.Sprintf("file %s did not contain %q", path, assertion.Contains))
 
+	case AssertFileAbsent:
+		path := assertion.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(e.runtimeRoot, path)
+		}
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return passAssertion(assertion, fmt.Sprintf("file %s is absent", path))
+			}
+			return failAssertion(assertion, err.Error())
+		}
+		return failAssertion(assertion, fmt.Sprintf("file %s exists but should be absent", path))
+
 	case AssertSessionStateContain:
 		sessionID := firstNonEmpty(assertion.SessionID, "default")
 		state, err := e.chatService.SessionState(sessionID)
@@ -446,6 +631,48 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 			return passAssertion(assertion, fmt.Sprintf("session field %s contained %q", assertion.Field, assertion.Contains))
 		}
 		return failAssertion(assertion, fmt.Sprintf("session field %s=%q did not contain %q", assertion.Field, value, assertion.Contains))
+
+	case AssertWorkingTopicContains:
+		state, err := e.chatService.SessionState(firstNonEmpty(assertion.SessionID, "default"))
+		if err != nil {
+			return failAssertion(assertion, err.Error())
+		}
+		if strings.Contains(state.Topic, assertion.Contains) {
+			return passAssertion(assertion, fmt.Sprintf("working topic contained %q", assertion.Contains))
+		}
+		return failAssertion(assertion, fmt.Sprintf("working topic=%q did not contain %q", state.Topic, assertion.Contains))
+
+	case AssertWorkingFocusTaskEquals:
+		state, err := e.chatService.SessionState(firstNonEmpty(assertion.SessionID, "default"))
+		if err != nil {
+			return failAssertion(assertion, err.Error())
+		}
+		actual := strings.TrimSpace(state.FocusTaskID)
+		expected := strings.TrimSpace(assertion.Equals)
+		if actual == expected {
+			return passAssertion(assertion, fmt.Sprintf("working focus task matched %s", expected))
+		}
+		return failAssertion(assertion, fmt.Sprintf("working focus_task_id=%q expected=%q", actual, expected))
+
+	case AssertWorkingPendingQuestionContains:
+		state, err := e.chatService.SessionState(firstNonEmpty(assertion.SessionID, "default"))
+		if err != nil {
+			return failAssertion(assertion, err.Error())
+		}
+		if strings.Contains(state.PendingQuestion, assertion.Contains) {
+			return passAssertion(assertion, fmt.Sprintf("working pending question contained %q", assertion.Contains))
+		}
+		return failAssertion(assertion, fmt.Sprintf("working pending_question=%q did not contain %q", state.PendingQuestion, assertion.Contains))
+
+	case AssertWorkingPendingActionContains:
+		state, err := e.chatService.SessionState(firstNonEmpty(assertion.SessionID, "default"))
+		if err != nil {
+			return failAssertion(assertion, err.Error())
+		}
+		if strings.Contains(state.PendingAction, assertion.Contains) {
+			return passAssertion(assertion, fmt.Sprintf("working pending action contained %q", assertion.Contains))
+		}
+		return failAssertion(assertion, fmt.Sprintf("working pending_action=%q did not contain %q", state.PendingAction, assertion.Contains))
 
 	case AssertMemoryCardCount:
 		resp := e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)})
@@ -464,6 +691,78 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 		}
 		return failAssertion(assertion, fmt.Sprintf("no memory card type=%s contained %q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
 
+	case AssertDurableCardCount:
+		resp := e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)})
+		return evaluateCountAssertion(assertion, len(resp.Cards), fmt.Sprintf("durable cards type=%s", firstNonEmpty(assertion.Field, "all")))
+
+	case AssertDurableCardContains:
+		resp := e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)})
+		for _, card := range resp.Cards {
+			raw, err := json.Marshal(card.Content)
+			if err != nil {
+				continue
+			}
+			if strings.Contains(string(raw), assertion.Contains) {
+				return passAssertion(assertion, fmt.Sprintf("durable card %s contained %q", card.CardID, assertion.Contains))
+			}
+		}
+		return failAssertion(assertion, fmt.Sprintf("no durable card type=%s contained %q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+
+	case AssertDurableCardStatus:
+		card, ok := findMatchingCard(
+			e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)}).Cards,
+			assertion.Contains,
+		)
+		if !ok {
+			return failAssertion(assertion, fmt.Sprintf("no durable card type=%s matched contains=%q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+		}
+		if card.Status == assertion.Equals {
+			return passAssertion(assertion, fmt.Sprintf("durable card %s status=%s", card.CardID, card.Status))
+		}
+		return failAssertion(assertion, fmt.Sprintf("durable card %s status=%s expected=%s", card.CardID, card.Status, assertion.Equals))
+
+	case AssertDurableCardConfidenceRange:
+		card, ok := findMatchingCard(
+			e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)}).Cards,
+			assertion.Contains,
+		)
+		if !ok {
+			return failAssertion(assertion, fmt.Sprintf("no durable card type=%s matched contains=%q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+		}
+		actual := card.Provenance.Confidence
+		if confidenceInRange(actual, assertion.MinConfidence, assertion.MaxConfidence) {
+			return passAssertion(assertion, fmt.Sprintf("durable card %s confidence=%.3f within [%.3f, %.3f]", card.CardID, actual, assertion.MinConfidence, assertion.MaxConfidence))
+		}
+		return failAssertion(assertion, fmt.Sprintf("durable card %s confidence=%.3f outside [%.3f, %.3f]", card.CardID, actual, assertion.MinConfidence, assertion.MaxConfidence))
+
+	case AssertDurableCardScope:
+		card, ok := findMatchingCard(
+			e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)}).Cards,
+			assertion.Contains,
+		)
+		if !ok {
+			return failAssertion(assertion, fmt.Sprintf("no durable card type=%s matched contains=%q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+		}
+		actual := cardScope(card)
+		if actual == strings.TrimSpace(assertion.Equals) {
+			return passAssertion(assertion, fmt.Sprintf("durable card %s scope=%s", card.CardID, actual))
+		}
+		return failAssertion(assertion, fmt.Sprintf("durable card %s scope=%q expected=%q", card.CardID, actual, assertion.Equals))
+
+	case AssertDurableCardSupersedes:
+		card, ok := findMatchingCard(
+			e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)}).Cards,
+			assertion.Contains,
+		)
+		if !ok {
+			return failAssertion(assertion, fmt.Sprintf("no durable card type=%s matched contains=%q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+		}
+		expected := strings.TrimSpace(assertion.Equals)
+		if strings.TrimSpace(card.Supersedes) == expected {
+			return passAssertion(assertion, fmt.Sprintf("durable card %s supersedes=%s", card.CardID, card.Supersedes))
+		}
+		return failAssertion(assertion, fmt.Sprintf("durable card %s supersedes=%q expected=%q", card.CardID, card.Supersedes, expected))
+
 	case AssertEdgeCount:
 		resp := e.memoryStore.Query(memory.QueryRequest{})
 		count := 0
@@ -474,6 +773,21 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 			}
 		}
 		return evaluateCountAssertion(assertion, count, fmt.Sprintf("memory edges type=%s", firstNonEmpty(edgeType, "all")))
+
+	case AssertEdgeExists:
+		resp := e.memoryStore.Query(memory.QueryRequest{})
+		edgeType := strings.TrimSpace(assertion.Field)
+		contains := strings.TrimSpace(assertion.Contains)
+		for _, edge := range resp.Edges {
+			if edgeType != "" && edge.EdgeType != edgeType {
+				continue
+			}
+			if contains != "" && !strings.Contains(edge.FromCardID, contains) && !strings.Contains(edge.ToCardID, contains) {
+				continue
+			}
+			return passAssertion(assertion, fmt.Sprintf("edge %s exists type=%s from=%s to=%s", edge.EdgeID, edge.EdgeType, edge.FromCardID, edge.ToCardID))
+		}
+		return failAssertion(assertion, fmt.Sprintf("no edge exists for type=%s contains=%q", firstNonEmpty(edgeType, "all"), contains))
 
 	case AssertRecallContains:
 		req := recall.Request{
@@ -494,6 +808,63 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 			}
 		}
 		return failAssertion(assertion, fmt.Sprintf("recall query=%q source=%q did not contain %q", assertion.Query, assertion.Source, assertion.Contains))
+
+	case AssertRecallNotContains:
+		req := recall.Request{
+			Query: strings.TrimSpace(assertion.Query),
+			Limit: 10,
+		}
+		if source := strings.TrimSpace(assertion.Source); source != "" {
+			req.Sources = []string{source}
+		}
+		resp := e.recall.Recall(req)
+		for _, hit := range resp.Hits {
+			if strings.Contains(hit.Snippet, assertion.Contains) {
+				return failAssertion(assertion, fmt.Sprintf("recall hit %s unexpectedly contained %q", hit.CardID, assertion.Contains))
+			}
+			raw, err := json.Marshal(hit.Card.Content)
+			if err == nil && strings.Contains(string(raw), assertion.Contains) {
+				return failAssertion(assertion, fmt.Sprintf("recall card %s unexpectedly contained %q", hit.CardID, assertion.Contains))
+			}
+		}
+		return passAssertion(assertion, fmt.Sprintf("recall query=%q source=%q did not contain %q", assertion.Query, assertion.Source, assertion.Contains))
+
+	case AssertProcedureCount:
+		resp := e.memoryStore.Query(memory.QueryRequest{
+			CardType: "procedure",
+			Status:   memory.CardStatusActive,
+		})
+		return evaluateCountAssertion(assertion, len(resp.Cards), "active procedures")
+
+	case AssertProcedureContains:
+		resp := e.memoryStore.Query(memory.QueryRequest{
+			CardType: "procedure",
+			Status:   memory.CardStatusActive,
+		})
+		for _, card := range resp.Cards {
+			raw, err := json.Marshal(card.Content)
+			if err != nil {
+				continue
+			}
+			if strings.Contains(string(raw), assertion.Contains) {
+				return passAssertion(assertion, fmt.Sprintf("procedure %s contained %q", card.CardID, assertion.Contains))
+			}
+		}
+		return failAssertion(assertion, fmt.Sprintf("no active procedure contained %q", assertion.Contains))
+
+	case AssertProcedureStepContains:
+		resp := e.memoryStore.Query(memory.QueryRequest{
+			CardType: "procedure",
+			Status:   memory.CardStatusActive,
+		})
+		for _, card := range resp.Cards {
+			for _, value := range procedureFields(card) {
+				if strings.Contains(value, assertion.Contains) {
+					return passAssertion(assertion, fmt.Sprintf("procedure %s step contained %q", card.CardID, assertion.Contains))
+				}
+			}
+		}
+		return failAssertion(assertion, fmt.Sprintf("no active procedure step contained %q", assertion.Contains))
 
 	default:
 		return failAssertion(assertion, fmt.Sprintf("unsupported assertion type %q", assertion.Type))
@@ -605,6 +976,57 @@ func evaluateCountAssertion(assertion Assertion, actual int, subject string) Ass
 	return failAssertion(assertion, fmt.Sprintf("%s count=%d expected=%d", subject, actual, assertion.Expected))
 }
 
+func findMatchingCard(cards []memory.Card, contains string) (memory.Card, bool) {
+	if len(cards) == 0 {
+		return memory.Card{}, false
+	}
+	contains = strings.TrimSpace(contains)
+	if contains == "" {
+		return cards[0], true
+	}
+	for _, card := range cards {
+		raw, err := json.Marshal(card.Content)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(raw), contains) {
+			return card, true
+		}
+	}
+	return memory.Card{}, false
+}
+
+func confidenceInRange(actual, minValue, maxValue float64) bool {
+	if minValue != 0 && actual < minValue {
+		return false
+	}
+	if maxValue != 0 && actual > maxValue {
+		return false
+	}
+	return true
+}
+
+func cardScope(card memory.Card) string {
+	if scope := strings.TrimSpace(card.Scope); scope != "" {
+		return scope
+	}
+	if card.Content != nil {
+		if scope, ok := card.Content["scope"].(string); ok {
+			return strings.TrimSpace(scope)
+		}
+	}
+	switch card.CardType {
+	case "email_inbox", "email_summary", "email_thread", "email_message":
+		return "user"
+	case "web_search", "search_summary", "web_result":
+		return "project"
+	case "github_issue_search", "github_issue_summary", "github_issue":
+		return "project"
+	default:
+		return ""
+	}
+}
+
 func assertionDescription(assertion Assertion) string {
 	switch assertion.Type {
 	case AssertTaskState:
@@ -623,16 +1045,42 @@ func assertionDescription(assertion Assertion) string {
 		return fmt.Sprintf("assistant reply from %s contains %q", assertion.Step, assertion.Contains)
 	case AssertFileContains:
 		return fmt.Sprintf("file %s contains %q", assertion.Path, assertion.Contains)
+	case AssertFileAbsent:
+		return fmt.Sprintf("file %s is absent", assertion.Path)
 	case AssertSessionStateContain:
 		return fmt.Sprintf("session %s field %s contains %q", firstNonEmpty(assertion.SessionID, "default"), assertion.Field, assertion.Contains)
+	case AssertWorkingTopicContains:
+		return fmt.Sprintf("working topic for session %s contains %q", firstNonEmpty(assertion.SessionID, "default"), assertion.Contains)
+	case AssertWorkingFocusTaskEquals:
+		return fmt.Sprintf("working focus task for session %s equals %q", firstNonEmpty(assertion.SessionID, "default"), assertion.Equals)
+	case AssertWorkingPendingQuestionContains:
+		return fmt.Sprintf("working pending question for session %s contains %q", firstNonEmpty(assertion.SessionID, "default"), assertion.Contains)
+	case AssertWorkingPendingActionContains:
+		return fmt.Sprintf("working pending action for session %s contains %q", firstNonEmpty(assertion.SessionID, "default"), assertion.Contains)
 	case AssertMemoryCardCount:
 		return fmt.Sprintf("memory card count for type %s", firstNonEmpty(assertion.Field, "all"))
 	case AssertMemoryCardContains:
 		return fmt.Sprintf("memory card type %s contains %q", firstNonEmpty(assertion.Field, "all"), assertion.Contains)
+	case AssertDurableCardCount:
+		return fmt.Sprintf("durable card count for type %s", firstNonEmpty(assertion.Field, "all"))
+	case AssertDurableCardContains:
+		return fmt.Sprintf("durable card type %s contains %q", firstNonEmpty(assertion.Field, "all"), assertion.Contains)
+	case AssertDurableCardStatus:
+		return fmt.Sprintf("durable card type %s has status %q", firstNonEmpty(assertion.Field, "all"), assertion.Equals)
+	case AssertDurableCardConfidenceRange:
+		return fmt.Sprintf("durable card type %s confidence is within [%.3f, %.3f]", firstNonEmpty(assertion.Field, "all"), assertion.MinConfidence, assertion.MaxConfidence)
+	case AssertDurableCardScope:
+		return fmt.Sprintf("durable card type %s has scope %q", firstNonEmpty(assertion.Field, "all"), assertion.Equals)
+	case AssertDurableCardSupersedes:
+		return fmt.Sprintf("durable card type %s supersedes %q", firstNonEmpty(assertion.Field, "all"), assertion.Equals)
 	case AssertEdgeCount:
 		return fmt.Sprintf("edge count for type %s", firstNonEmpty(assertion.Field, "all"))
+	case AssertEdgeExists:
+		return fmt.Sprintf("edge type %s exists with card match %q", firstNonEmpty(assertion.Field, "all"), assertion.Contains)
 	case AssertRecallContains:
 		return fmt.Sprintf("recall query %q source %s contains %q", assertion.Query, firstNonEmpty(assertion.Source, "all"), assertion.Contains)
+	case AssertRecallNotContains:
+		return fmt.Sprintf("recall query %q source %s does not contain %q", assertion.Query, firstNonEmpty(assertion.Source, "all"), assertion.Contains)
 	default:
 		return assertion.Type
 	}
@@ -717,4 +1165,31 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func procedureFields(card memory.Card) []string {
+	values := make([]string, 0, 3)
+	for _, key := range []string{"steps", "guardrails", "summary"} {
+		switch typed := card.Content[key].(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				values = append(values, typed)
+			}
+		case []string:
+			if len(typed) > 0 {
+				values = append(values, strings.Join(typed, "\n"))
+			}
+		case []any:
+			parts := make([]string, 0, len(typed))
+			for _, item := range typed {
+				if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+				}
+			}
+			if len(parts) > 0 {
+				values = append(values, strings.Join(parts, "\n"))
+			}
+		}
+	}
+	return values
 }
