@@ -4,8 +4,7 @@
 >
 > Persistent agents with runtime state, OS automation, governed memory, skills, and controlled privileges.
 
-
-MnemosyneOS is an AgentOS that lets an agent operate a computer like a persistent system process with memory and execution state:
+**MnemosyneOS is a persistent AgentOS** that lets an AI agent operate a computer like a system process with dedicated memory, execution state, and controlled privileges. It is *not* a Python library, SDK, or a simple memory plugin.
 
 * Interact through a local console and remote APIs
 * Use `skills` as executable behavior modules
@@ -26,12 +25,12 @@ Its memory model is built around:
 
 MnemosyneOS is both:
 
-* A research framework for cognitive-inspired AI memory and agent runtimes
 * A production-oriented AgentOS for Linux/macOS systems
+* A research framework for cognitive-inspired AI memory and agent runtimes
 
 ---
 
-## Quick Start (Go Service + Python SDK)
+## Quick Start (Go Service)
 
 ### 0) Local config
 
@@ -73,29 +72,7 @@ Optional email connector via IMAP:
 Optional root approval token:
 `MNEMOSYNE_ROOT_APPROVAL_TOKEN='replace_me_for_root_tests'`
 
-### 2) Use Python SDK
-
-```bash
-cd python
-pip install -e .
-```
-
-```python
-from mnemosyne_sdk import CreateCardRequest, MnemosyneClient
-
-client = MnemosyneClient(base_url="http://127.0.0.1:8080")
-card = client.create_card(
-    CreateCardRequest(
-        card_id="evt-1",
-        card_type="event",
-        content={"text": "User likes black coffee"},
-    )
-)
-print(card.card_id, card.version)
-client.close()
-```
-
-### 3) Use local console
+### 2) Use local console
 
 With the API service running:
 
@@ -112,7 +89,7 @@ go run ./cmd/mnemosynectl approve-action <approval-id>
 Default API base: `http://127.0.0.1:8080`  
 Override with env: `MNEMOSYNE_API_BASE=http://127.0.0.1:8090`
 
-### 4) Use the web console
+### 3) Use the web console
 
 With the API service running, open:
 
@@ -131,7 +108,7 @@ Current pages:
 - `/ui/models` for runtime model provider, preset, per-profile model selection, max token budgets, temperature tuning, token budgets, and connectivity testing
 - `/ui/artifacts/view` for artifact page/raw/download access
 
-### 5) Run the harness
+### 4) Run the harness
 
 ```bash
 go run ./cmd/mnemosyne-harness
@@ -204,7 +181,7 @@ Current root approval MVP behavior:
 - approve with `mnemosynectl approve-action <approval-id>` and rerun the task
 - this is still a control-plane authorization gate only; it does not yet provide real OS-level privilege escalation
 
-### 6) Project references
+### 5) Project references
 
 - Getting started: [`GETTING_STARTED.md`](./GETTING_STARTED.md)
 - Project direction: [`PROJECT_DIRECTION.md`](./PROJECT_DIRECTION.md)
@@ -289,7 +266,6 @@ Structured memory units:
 
 ---
 
-
 ```plaintext
 mnemosyneos/
 │
@@ -323,8 +299,8 @@ mnemosyneos/
 └── examples/
     └── agent_integration/
 ```
---
 
+---
 
 ## Research Goals
 
@@ -401,5 +377,3 @@ The current test strategy is:
 * Evidence integrity benchmark
 * Memory contamination benchmark
 * Narrative coherence benchmark
-
----
