@@ -21,15 +21,23 @@ func TestExecuteFileWriteAndRead(t *testing.T) {
 	}
 
 	writeRecord, err := executor.ExecuteFileWrite(FileWriteActionRequest{
-		Path:          "notes/output.txt",
-		Content:       "mnemosyne runtime",
-		CreateParents: true,
+		Path:           "notes/output.txt",
+		Content:        "mnemosyne runtime",
+		CreateParents:  true,
+		Attempt:        2,
+		IdempotencyKey: "file-write-notes-output",
 	})
 	if err != nil {
 		t.Fatalf("ExecuteFileWrite returned error: %v", err)
 	}
 	if writeRecord.Status != ActionStatusCompleted {
 		t.Fatalf("expected completed write, got %s", writeRecord.Status)
+	}
+	if writeRecord.Attempt != 2 {
+		t.Fatalf("expected attempt=2, got %d", writeRecord.Attempt)
+	}
+	if writeRecord.IdempotencyKey != "file-write-notes-output" {
+		t.Fatalf("unexpected idempotency key: %q", writeRecord.IdempotencyKey)
 	}
 
 	path := filepath.Join(workspaceRoot, "notes", "output.txt")
@@ -65,8 +73,9 @@ func TestExecuteShellAllowedCommand(t *testing.T) {
 	}
 
 	record, err := executor.ExecuteShell(ShellActionRequest{
-		Command: "pwd",
-		Workdir: ".",
+		Command:        "pwd",
+		Workdir:        ".",
+		IdempotencyKey: "shell-pwd",
 	})
 	if err != nil {
 		t.Fatalf("ExecuteShell returned error: %v", err)
@@ -76,6 +85,76 @@ func TestExecuteShellAllowedCommand(t *testing.T) {
 	}
 	if record.Stdout == "" {
 		t.Fatalf("expected stdout from pwd")
+	}
+	if record.Attempt != 1 {
+		t.Fatalf("expected default attempt=1, got %d", record.Attempt)
+	}
+	if record.IdempotencyKey != "shell-pwd" {
+		t.Fatalf("unexpected idempotency key: %q", record.IdempotencyKey)
+	}
+}
+
+func TestExecuteShellTimeoutMarkedRetryable(t *testing.T) {
+	runtimeRoot := tempExecutionRoot(t)
+	workspaceRoot := t.TempDir()
+
+	store := NewStore(runtimeRoot)
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+
+	record, err := executor.ExecuteShell(ShellActionRequest{
+		Command:   "python3",
+		Args:      []string{"-c", "import time; time.sleep(0.05)"},
+		TimeoutMS: 1,
+		Attempt:   3,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteShell returned error: %v", err)
+	}
+	if record.Status != ActionStatusFailed {
+		t.Fatalf("expected failed shell action, got %s", record.Status)
+	}
+	if !record.Retryable {
+		t.Fatalf("expected timed out action to be retryable")
+	}
+	if record.FailureCategory != ActionFailureTimeout {
+		t.Fatalf("expected timeout failure category, got %s", record.FailureCategory)
+	}
+	if record.Attempt != 3 {
+		t.Fatalf("expected attempt=3, got %d", record.Attempt)
+	}
+}
+
+func TestExecuteShellProcessExitNotRetryable(t *testing.T) {
+	runtimeRoot := tempExecutionRoot(t)
+	workspaceRoot := t.TempDir()
+
+	store := NewStore(runtimeRoot)
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+
+	record, err := executor.ExecuteShell(ShellActionRequest{
+		Command: "python3",
+		Args:    []string{"-c", "import sys; sys.exit(7)"},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteShell returned error: %v", err)
+	}
+	if record.Status != ActionStatusFailed {
+		t.Fatalf("expected failed shell action, got %s", record.Status)
+	}
+	if record.Retryable {
+		t.Fatalf("expected process exit to stay non-retryable")
+	}
+	if record.FailureCategory != ActionFailureProcessExit {
+		t.Fatalf("expected process_exit failure category, got %s", record.FailureCategory)
+	}
+	if record.ExitCode != 7 {
+		t.Fatalf("expected exit code 7, got %d", record.ExitCode)
 	}
 }
 

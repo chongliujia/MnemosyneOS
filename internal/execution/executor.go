@@ -75,6 +75,8 @@ func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
 		TaskID:           strings.TrimSpace(req.TaskID),
 		Kind:             ActionKindShell,
 		Status:           ActionStatusRunning,
+		Attempt:          normalizeAttempt(req.Attempt, req.Metadata),
+		IdempotencyKey:   firstNonEmpty(req.IdempotencyKey, req.Metadata["idempotency_key"]),
 		ExecutionProfile: profile,
 		Command:          commandPath,
 		Args:             req.Args,
@@ -105,8 +107,14 @@ func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
 		record.Status = ActionStatusFailed
 		record.Error = runErr.Error()
 		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
+			record.FailureCategory = ActionFailureTimeout
+			record.Retryable = true
+		} else if errors.As(runErr, &exitErr) {
 			record.ExitCode = exitErr.ExitCode()
+			record.FailureCategory = ActionFailureProcessExit
+		} else {
+			record.FailureCategory = ActionFailureExecution
 		}
 		if err := e.store.Move(record, ActionStatusFailed); err != nil {
 			return ActionRecord{}, err
@@ -140,6 +148,8 @@ func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, err
 		TaskID:           strings.TrimSpace(req.TaskID),
 		Kind:             ActionKindFileRead,
 		Status:           ActionStatusRunning,
+		Attempt:          normalizeAttempt(req.Attempt, req.Metadata),
+		IdempotencyKey:   firstNonEmpty(req.IdempotencyKey, req.Metadata["idempotency_key"]),
 		ExecutionProfile: profile,
 		Path:             path,
 		Metadata:         cloneMetadata(req.Metadata),
@@ -155,6 +165,7 @@ func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, err
 	if readErr != nil {
 		record.Status = ActionStatusFailed
 		record.Error = readErr.Error()
+		record.FailureCategory = ActionFailureIO
 		if err := e.store.Move(record, ActionStatusFailed); err != nil {
 			return ActionRecord{}, err
 		}
@@ -188,6 +199,8 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 		TaskID:           strings.TrimSpace(req.TaskID),
 		Kind:             ActionKindFileWrite,
 		Status:           ActionStatusRunning,
+		Attempt:          normalizeAttempt(req.Attempt, req.Metadata),
+		IdempotencyKey:   firstNonEmpty(req.IdempotencyKey, req.Metadata["idempotency_key"]),
 		ExecutionProfile: profile,
 		Path:             path,
 		ChangedFiles:     []string{path},
@@ -202,6 +215,7 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			record.Status = ActionStatusFailed
 			record.Error = err.Error()
+			record.FailureCategory = ActionFailureIO
 			finishedAt := time.Now().UTC()
 			record.FinishedAt = &finishedAt
 			if moveErr := e.store.Move(record, ActionStatusFailed); moveErr != nil {
@@ -216,6 +230,7 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 	if writeErr != nil {
 		record.Status = ActionStatusFailed
 		record.Error = writeErr.Error()
+		record.FailureCategory = ActionFailureIO
 		if err := e.store.Move(record, ActionStatusFailed); err != nil {
 			return ActionRecord{}, err
 		}
@@ -316,6 +331,21 @@ func cloneMetadata(input map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func normalizeAttempt(explicit int, metadata map[string]string) int {
+	if explicit > 0 {
+		return explicit
+	}
+	if metadata != nil {
+		if value := strings.TrimSpace(metadata["attempt"]); value != "" {
+			var parsed int
+			if _, err := fmt.Sscanf(value, "%d", &parsed); err == nil && parsed > 0 {
+				return parsed
+			}
+		}
+	}
+	return 1
 }
 
 func (e *Executor) authorizeProfile(profile, approvalToken string) error {
