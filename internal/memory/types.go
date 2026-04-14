@@ -45,9 +45,10 @@ type Provenance struct {
 }
 
 type ActivationState struct {
-	Score        float64    `json:"score"`
-	LastAccessAt *time.Time `json:"last_access_at,omitempty"`
-	DecayPolicy  string     `json:"decay_policy,omitempty"`
+	Score           float64    `json:"score"`
+	LastAccessAt    *time.Time `json:"last_access_at,omitempty"`
+	LastEvaluatedAt *time.Time `json:"last_evaluated_at,omitempty"`
+	DecayPolicy     string     `json:"decay_policy,omitempty"`
 }
 
 type Edge struct {
@@ -64,16 +65,17 @@ type Edge struct {
 }
 
 type CreateCardRequest struct {
-	CardID       string         `json:"card_id"`
-	CardType     string         `json:"card_type"`
-	Scope        string         `json:"scope,omitempty"`
-	Status       string         `json:"status,omitempty"`
-	Supersedes   string         `json:"supersedes,omitempty"`
-	ValidFrom    *time.Time     `json:"valid_from,omitempty"`
-	ValidTo      *time.Time     `json:"valid_to,omitempty"`
-	Content      map[string]any `json:"content"`
-	EvidenceRefs []EvidenceRef  `json:"evidence_refs,omitempty"`
-	Provenance   Provenance     `json:"provenance"`
+	CardID       string           `json:"card_id"`
+	CardType     string           `json:"card_type"`
+	Scope        string           `json:"scope,omitempty"`
+	Status       string           `json:"status,omitempty"`
+	Supersedes   string           `json:"supersedes,omitempty"`
+	ValidFrom    *time.Time       `json:"valid_from,omitempty"`
+	ValidTo      *time.Time       `json:"valid_to,omitempty"`
+	Activation   *ActivationState `json:"activation,omitempty"`
+	Content      map[string]any   `json:"content"`
+	EvidenceRefs []EvidenceRef    `json:"evidence_refs,omitempty"`
+	Provenance   Provenance       `json:"provenance"`
 }
 
 type UpdateCardRequest struct {

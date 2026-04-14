@@ -50,6 +50,11 @@ func (s *Server) Routes() http.Handler {
 	s.registerWebRoutes(mux)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /runtime/state", s.handleRuntimeState)
+	mux.HandleFunc("GET /skills", s.handleListSkills)
+	mux.HandleFunc("GET /skills/schema", s.handleSkillSchema)
+	mux.HandleFunc("POST /skills/reload", s.handleReloadSkills)
+	mux.HandleFunc("PATCH /skills/", s.handleSkillRoute)
+	mux.HandleFunc("PUT /skills/manifests/", s.handleSkillManifestRoute)
 	mux.HandleFunc("GET /tasks", s.handleListTasks)
 	mux.HandleFunc("POST /tasks", s.handleCreateTask)
 	mux.HandleFunc("GET /tasks/", s.handleTaskRoute)
@@ -83,6 +88,178 @@ func (s *Server) handleRuntimeState(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
+}
+
+func (s *Server) handleListSkills(w http.ResponseWriter, _ *http.Request) {
+	if s.skillRunner == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"skills":            []skills.Definition{},
+			"manifest_statuses": []skills.ManifestStatus{},
+			"health":            skillHealth(nil, nil),
+			"schema":            skillSchema(),
+		})
+		return
+	}
+	skillsList := s.skillRunner.ListSkills()
+	statuses := s.skillRunner.ListManifestStatuses()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"skills":            skillsList,
+		"manifest_statuses": statuses,
+		"health":            skillHealth(skillsList, statuses),
+		"schema":            skillSchema(),
+	})
+}
+
+func (s *Server) handleSkillSchema(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"schema": skillSchema()})
+}
+
+func (s *Server) handleReloadSkills(w http.ResponseWriter, _ *http.Request) {
+	if s.skillRunner == nil {
+		writeError(w, http.StatusNotImplemented, "skill runner is not configured")
+		return
+	}
+	var reloadErr string
+	if err := s.skillRunner.ReloadSkills(); err != nil {
+		reloadErr = err.Error()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"skills":            s.skillRunner.ListSkills(),
+		"manifest_statuses": s.skillRunner.ListManifestStatuses(),
+		"health":            skillHealth(s.skillRunner.ListSkills(), s.skillRunner.ListManifestStatuses()),
+		"schema":            skillSchema(),
+		"error":             reloadErr,
+	})
+}
+
+func (s *Server) handleSkillRoute(w http.ResponseWriter, r *http.Request) {
+	if s.skillRunner == nil {
+		writeError(w, http.StatusNotImplemented, "skill runner is not configured")
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/skills/")
+	name := strings.Trim(strings.TrimSuffix(path, "/"), "/")
+	if name == "" {
+		writeError(w, http.StatusNotFound, "skill route not found")
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.skillRunner.SetSkillEnabled(name, req.Enabled); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"skills":            s.skillRunner.ListSkills(),
+		"manifest_statuses": s.skillRunner.ListManifestStatuses(),
+		"health":            skillHealth(s.skillRunner.ListSkills(), s.skillRunner.ListManifestStatuses()),
+		"schema":            skillSchema(),
+	})
+}
+
+func (s *Server) handleSkillManifestRoute(w http.ResponseWriter, r *http.Request) {
+	if s.skillRunner == nil {
+		writeError(w, http.StatusNotImplemented, "skill runner is not configured")
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/skills/manifests/")
+	name := strings.Trim(strings.TrimSuffix(path, "/"), "/")
+	if name == "" {
+		writeError(w, http.StatusNotFound, "skill manifest route not found")
+		return
+	}
+	var manifest skills.Manifest
+	if err := decodeJSON(r, &manifest); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(manifest.Name) == "" {
+		manifest.Name = name
+	}
+	if strings.TrimSpace(manifest.Name) != name {
+		writeError(w, http.StatusBadRequest, "manifest name does not match path")
+		return
+	}
+	pathSaved, err := s.skillRunner.SaveManifest(manifest)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	skillsList := s.skillRunner.ListSkills()
+	statuses := s.skillRunner.ListManifestStatuses()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":              pathSaved,
+		"skills":            skillsList,
+		"manifest_statuses": statuses,
+		"health":            skillHealth(skillsList, statuses),
+		"schema":            skillSchema(),
+	})
+}
+
+func skillHealth(defs []skills.Definition, statuses []skills.ManifestStatus) map[string]any {
+	bySource := map[string]int{}
+	enabled := 0
+	disabled := 0
+	for _, def := range defs {
+		bySource[firstNonEmpty(def.Source, "runtime")]++
+		if def.Enabled {
+			enabled++
+		} else {
+			disabled++
+		}
+	}
+	manifestLoaded := 0
+	manifestErrors := 0
+	for _, status := range statuses {
+		if status.Loaded {
+			manifestLoaded++
+		}
+		if strings.TrimSpace(status.Error) != "" {
+			manifestErrors++
+		}
+	}
+	return map[string]any{
+		"total_skills":    len(defs),
+		"enabled_skills":  enabled,
+		"disabled_skills": disabled,
+		"by_source":       bySource,
+		"manifest_loaded": manifestLoaded,
+		"manifest_errors": manifestErrors,
+		"manifest_total":  len(statuses),
+	}
+}
+
+func skillSchema() map[string]any {
+	return map[string]any{
+		"execution_profiles": []string{"user", "root"},
+		"maintenance_scopes": []string{"project", "user"},
+		"external_kinds":     []string{"command"},
+		"manifest_fields": []map[string]any{
+			{"name": "name", "required": true, "type": "string"},
+			{"name": "description", "required": false, "type": "string"},
+			{"name": "uses", "required": false, "type": "string", "notes": "mutually exclusive with external"},
+			{"name": "enabled", "required": false, "type": "bool"},
+			{"name": "default_metadata", "required": false, "type": "map[string]string"},
+			{"name": "execution_profile", "required": false, "type": "enum", "values": []string{"user", "root"}},
+			{"name": "maintenance_policy", "required": false, "type": "object"},
+			{"name": "external", "required": false, "type": "object", "notes": "mutually exclusive with uses"},
+		},
+		"external_fields": []map[string]any{
+			{"name": "kind", "required": true, "type": "enum", "values": []string{"command"}},
+			{"name": "command", "required": true, "type": "relative-path"},
+			{"name": "args", "required": false, "type": "[]string"},
+			{"name": "env", "required": false, "type": "map[string]string"},
+			{"name": "workdir", "required": false, "type": "relative-path"},
+			{"name": "timeout_ms", "required": false, "type": "int"},
+			{"name": "allow_write_root", "required": false, "type": "bool"},
+			{"name": "require_approval", "required": false, "type": "bool"},
+		},
+	}
 }
 
 func (s *Server) handleListTasks(w http.ResponseWriter, _ *http.Request) {
@@ -189,6 +366,15 @@ func (s *Server) handleDenyTask(w http.ResponseWriter, r *http.Request, taskID s
 }
 
 func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request, taskID string) {
+	if task, err := s.runtimeStore.GetTask(taskID); err == nil {
+		switch task.State {
+		case airuntime.TaskStateFailed, airuntime.TaskStateBlocked:
+			if _, err := s.orchestrator.RequeueTask(taskID, "api_run", nil); err != nil {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+		}
+	}
 	result, err := s.skillRunner.RunTask(taskID)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -514,11 +700,10 @@ func (s *Server) handleApproveApproval(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	if record.TaskID != "" {
-		_, _ = s.runtimeStore.MoveTask(record.TaskID, airuntime.TaskStatePlanned, func(task *airuntime.Task) {
+		_, _ = s.orchestrator.RequeueTask(record.TaskID, "approval_granted", func(task *airuntime.Task) {
 			ensureTaskMetadata(task)
 			task.Metadata["root_approval_id"] = record.ApprovalID
 			task.NextAction = "root approval granted; rerun task"
-			task.FailureReason = ""
 		})
 	}
 	writeJSON(w, http.StatusOK, record)

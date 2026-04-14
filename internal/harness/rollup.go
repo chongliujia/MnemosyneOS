@@ -36,6 +36,13 @@ type ScenarioStats struct {
 	ProcedureFeedbackUpdates int      `json:"procedure_feedback_updates,omitempty"`
 	RetryAttempts            int      `json:"retry_attempts,omitempty"`
 	RetrySuccesses           int      `json:"retry_successes,omitempty"`
+	ActionReplays            int      `json:"action_replays,omitempty"`
+	SchedulerTriggers        int      `json:"scheduler_triggers,omitempty"`
+	SchedulerCooldownSkips   int      `json:"scheduler_cooldown_skips,omitempty"`
+	SchedulerThresholdSkips  int      `json:"scheduler_threshold_skips,omitempty"`
+	SchedulerTypeSkips       int      `json:"scheduler_type_skips,omitempty"`
+	SchedulerExistingSkips   int      `json:"scheduler_existing_task_skips,omitempty"`
+	SchedulerBusySkips       int      `json:"scheduler_runtime_busy_skips,omitempty"`
 	MemoryFailures           int      `json:"memory_failures,omitempty"`
 	AverageDurationMS        int64    `json:"average_duration_ms"`
 	LatestRunDir             string   `json:"latest_run_dir,omitempty"`
@@ -121,6 +128,26 @@ func BuildRollupWithScope(root string, tags []string, lane string) (Rollup, erro
 			entry.stats.RetryAttempts += step.RetryAttempts
 			if step.RetrySucceeded {
 				entry.stats.RetrySuccesses++
+			}
+			if step.ActionReplayed {
+				entry.stats.ActionReplays++
+			}
+			if step.Type == StepTypeScheduleMemory {
+				if step.SchedulerTriggered {
+					entry.stats.SchedulerTriggers++
+				}
+				switch strings.TrimSpace(step.SchedulerSkipReason) {
+				case "cooldown":
+					entry.stats.SchedulerCooldownSkips++
+				case "candidate_threshold":
+					entry.stats.SchedulerThresholdSkips++
+				case "no_eligible_candidates":
+					entry.stats.SchedulerTypeSkips++
+				case "existing_consolidation_task":
+					entry.stats.SchedulerExistingSkips++
+				case "runtime_busy":
+					entry.stats.SchedulerBusySkips++
+				}
 			}
 			if step.Type != StepTypeConsolidate || strings.TrimSpace(step.CardType) != "procedure" {
 				continue
@@ -295,6 +322,21 @@ func RenderRollupText(rollup Rollup) string {
 				fmt.Sprintf("  retry_attempts=%d retry_successes=%d",
 					scenario.RetryAttempts,
 					scenario.RetrySuccesses,
+				),
+			)
+		}
+		if scenario.ActionReplays > 0 {
+			lines = append(lines, fmt.Sprintf("  action_replays=%d", scenario.ActionReplays))
+		}
+		if scenario.SchedulerTriggers > 0 || scenario.SchedulerCooldownSkips > 0 || scenario.SchedulerThresholdSkips > 0 || scenario.SchedulerTypeSkips > 0 || scenario.SchedulerExistingSkips > 0 || scenario.SchedulerBusySkips > 0 {
+			lines = append(lines,
+				fmt.Sprintf("  scheduler_triggers=%d scheduler_cooldown_skips=%d scheduler_threshold_skips=%d scheduler_type_skips=%d scheduler_existing_task_skips=%d scheduler_runtime_busy_skips=%d",
+					scenario.SchedulerTriggers,
+					scenario.SchedulerCooldownSkips,
+					scenario.SchedulerThresholdSkips,
+					scenario.SchedulerTypeSkips,
+					scenario.SchedulerExistingSkips,
+					scenario.SchedulerBusySkips,
 				),
 			)
 		}

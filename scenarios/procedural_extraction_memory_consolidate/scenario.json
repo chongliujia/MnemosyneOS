@@ -1,0 +1,107 @@
+{
+  "name": "procedural_extraction_memory_consolidate",
+  "description": "Ensure repeated successful memory-consolidate runs can emit procedural evidence that is later extracted into active procedure memory.",
+  "lane": "regression",
+  "tags": [
+    "memory",
+    "procedural",
+    "consolidation",
+    "execution"
+  ],
+  "steps": [
+    {
+      "id": "submit_memory_run_1",
+      "type": "submit_task",
+      "title": "Consolidate expense audit memory run 1",
+      "goal": "Consolidate reusable expense audit memory",
+      "selected_skill": "memory-consolidate",
+      "metadata": {
+        "task_class": "expense_audit_memory",
+        "card_type": "procedure",
+        "scope": "project",
+        "procedure_steps": "collect_runs\nvalidate_policy\npromote_fact",
+        "procedure_guardrails": "never promote unsupported claims",
+        "procedure_summary": "Consolidate repeated expense audit evidence before promotion.",
+        "procedure_success_signal": "promotions recorded with evidence"
+      }
+    },
+    {
+      "id": "run_memory_1",
+      "type": "run_task",
+      "task_ref": "submit_memory_run_1"
+    },
+    {
+      "id": "submit_memory_run_2",
+      "type": "submit_task",
+      "title": "Consolidate expense audit memory run 2",
+      "goal": "Consolidate reusable expense audit memory again",
+      "selected_skill": "memory-consolidate",
+      "metadata": {
+        "task_class": "expense_audit_memory",
+        "card_type": "procedure",
+        "scope": "project",
+        "procedure_steps": "collect_runs\nvalidate_policy\npromote_fact",
+        "procedure_guardrails": "never promote unsupported claims",
+        "procedure_summary": "Consolidate repeated expense audit evidence before promotion.",
+        "procedure_success_signal": "promotions recorded with evidence"
+      }
+    },
+    {
+      "id": "run_memory_2",
+      "type": "run_task",
+      "task_ref": "submit_memory_run_2"
+    },
+    {
+      "id": "extract_from_memory_runs",
+      "type": "consolidate_memory",
+      "metadata": {
+        "extract_procedures": "true",
+        "task_class": "expense_audit_memory",
+        "selected_skill": "memory-consolidate",
+        "min_runs": "2",
+        "card_type": "procedure",
+        "scope": "project"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_memory_1",
+      "equals": "done"
+    },
+    {
+      "type": "task_state",
+      "step": "run_memory_2",
+      "equals": "done"
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_memory_1",
+      "contains": "## Procedure Candidate"
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_memory_1",
+      "contains": "collect_runs"
+    },
+    {
+      "type": "procedure_count",
+      "expected": 1
+    },
+    {
+      "type": "procedure_contains",
+      "contains": "expense_audit_memory_memory_consolidate"
+    },
+    {
+      "type": "procedure_step_contains",
+      "contains": "promote_fact"
+    },
+    {
+      "type": "recall_contains",
+      "query": "expense audit memory promote fact",
+      "source": "procedure",
+      "contains": "promote_fact"
+    }
+  ]
+}

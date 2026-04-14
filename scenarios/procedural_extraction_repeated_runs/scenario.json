@@ -72,6 +72,16 @@
       "equals": "done"
     },
     {
+      "type": "artifact_contains",
+      "step": "run_plan_1",
+      "contains": "## Procedure Candidate"
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_plan_1",
+      "contains": "validate_policy"
+    },
+    {
       "type": "procedure_count",
       "expected": 1
     },

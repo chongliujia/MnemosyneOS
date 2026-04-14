@@ -17,8 +17,8 @@
       "selected_skill": "shell-command",
       "metadata": {
         "command": "python3",
-        "args": "-c \"import pathlib,time,sys;p=pathlib.Path('retryable-timeout-flag');sys.stdout.write('recovered\\\\n') if p.exists() else (p.write_text('1'),time.sleep(0.15))\"",
-        "timeout_ms": "60",
+        "args": "-c \"import pathlib,time,sys;p=pathlib.Path('retryable-timeout-flag');sys.stdout.write('recovered\\\\n') if p.exists() else (p.write_text('1'),time.sleep(0.30))\"",
+        "timeout_ms": "120",
         "max_attempts": "2",
         "idempotency_key": "retryable-timeout-shell"
       }

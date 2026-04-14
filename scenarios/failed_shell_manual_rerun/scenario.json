@@ -1,0 +1,82 @@
+{
+  "name": "failed_shell_manual_rerun",
+  "description": "Run a shell task that fails once with process_exit, requeue it, and assert the second execution succeeds with rerun metadata.",
+  "tags": [
+    "execution",
+    "shell",
+    "rerun",
+    "recovery"
+  ],
+  "lane": "regression",
+  "steps": [
+    {
+      "id": "submit_shell_rerun",
+      "type": "submit_task",
+      "title": "Run a shell task that succeeds on manual rerun",
+      "goal": "Run a shell command that exits once and succeeds after rerun",
+      "selected_skill": "shell-command",
+      "metadata": {
+        "command": "python3",
+        "args": "-c \"import pathlib,sys;p=pathlib.Path('manual-rerun-flag');sys.stdout.write('recovered\\\\n') if p.exists() else (p.write_text('1'),sys.exit(7))\"",
+        "timeout_ms": "500",
+        "max_attempts": "1",
+        "idempotency_key": "manual-rerun-shell"
+      }
+    },
+    {
+      "id": "run_shell_first",
+      "type": "run_task",
+      "task_ref": "submit_shell_rerun"
+    },
+    {
+      "id": "requeue_shell_task",
+      "type": "requeue_task",
+      "task_ref": "submit_shell_rerun",
+      "metadata": {
+        "trigger": "manual_rerun"
+      }
+    },
+    {
+      "id": "run_shell_second",
+      "type": "run_task",
+      "task_ref": "submit_shell_rerun"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_shell_first",
+      "equals": "failed"
+    },
+    {
+      "type": "action_failure_category",
+      "step": "run_shell_first",
+      "equals": "process_exit"
+    },
+    {
+      "type": "action_attempt_count",
+      "step": "run_shell_first",
+      "expected": 1
+    },
+    {
+      "type": "task_state",
+      "step": "requeue_shell_task",
+      "equals": "planned"
+    },
+    {
+      "type": "task_state",
+      "step": "run_shell_second",
+      "equals": "done"
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_shell_second",
+      "contains": "recovered"
+    },
+    {
+      "type": "file_contains",
+      "path": "workspace/manual-rerun-flag",
+      "contains": "1"
+    }
+  ]
+}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -104,6 +105,314 @@ func TestCreateTaskFormSubmitsTask(t *testing.T) {
 	}
 	if tasks[0].Metadata["query"] != "approval agentos" {
 		t.Fatalf("expected task metadata query to be persisted")
+	}
+}
+
+func TestListSkillsEndpointIncludesBuiltinAndManifestSkills(t *testing.T) {
+	handler, runtimeStore, _, _, _, _, skillRunner, _ := newWebTestServer(t)
+
+	manifestDir := filepath.Join(runtimeStore.RootDir(), "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	raw := []byte("{\n  \"name\": \"web-research\",\n  \"description\": \"Manifest alias for web search.\",\n  \"uses\": \"web-search\"\n}\n")
+	if err := os.WriteFile(filepath.Join(manifestDir, "web-research.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := skillRunner.LoadSkillManifests(manifestDir); err != nil {
+		t.Fatalf("LoadSkillManifests returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/skills", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var payload struct {
+		Skills []skills.Definition `json:"skills"`
+		Schema map[string]any      `json:"schema"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if len(payload.Skills) == 0 {
+		t.Fatalf("expected skills to be listed")
+	}
+	foundBuiltin := false
+	foundManifest := false
+	for _, skill := range payload.Skills {
+		if skill.Name == "web-search" && skill.Source == "builtin" {
+			foundBuiltin = true
+		}
+		if skill.Name == "web-research" && skill.Source == "manifest" && skill.Uses == "web-search" {
+			foundManifest = true
+		}
+	}
+	if !foundBuiltin || !foundManifest {
+		t.Fatalf("expected builtin and manifest skills in payload, got %+v", payload.Skills)
+	}
+}
+
+func TestReloadSkillsEndpointLoadsManifest(t *testing.T) {
+	handler, runtimeStore, _, _, _, _, _, _ := newWebTestServer(t)
+
+	manifestDir := filepath.Join(runtimeStore.RootDir(), "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	raw := []byte("{\n  \"name\": \"web-research\",\n  \"description\": \"Manifest alias for web search.\",\n  \"uses\": \"web-search\"\n}\n")
+	if err := os.WriteFile(filepath.Join(manifestDir, "web-research.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/skills/reload", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var payload struct {
+		Skills []skills.Definition `json:"skills"`
+		Schema map[string]any      `json:"schema"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	found := false
+	for _, skill := range payload.Skills {
+		if skill.Name == "web-research" && skill.Source == "manifest" && skill.Uses == "web-search" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected reloaded manifest skill in payload, got %+v", payload.Skills)
+	}
+	if payload.Schema["external_kinds"] == nil {
+		t.Fatalf("expected schema in response, got %+v", payload.Schema)
+	}
+}
+
+func TestPatchSkillEndpointPersistsEnableState(t *testing.T) {
+	handler, runtimeStore, _, _, _, _, _, _ := newWebTestServer(t)
+
+	manifestDir := filepath.Join(runtimeStore.RootDir(), "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	raw := []byte("{\n  \"name\": \"web-research\",\n  \"description\": \"Manifest alias for web search.\",\n  \"uses\": \"web-search\"\n}\n")
+	if err := os.WriteFile(filepath.Join(manifestDir, "web-research.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/skills/reload", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected reload status 200, got %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, "/skills/web-research", strings.NewReader(`{"enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected patch status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Skills []skills.Definition `json:"skills"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	foundDisabled := false
+	for _, skill := range payload.Skills {
+		if skill.Name == "web-research" && !skill.Enabled {
+			foundDisabled = true
+			break
+		}
+	}
+	if !foundDisabled {
+		t.Fatalf("expected manifest skill to be disabled, got %+v", payload.Skills)
+	}
+
+	stateData, err := os.ReadFile(filepath.Join(runtimeStore.RootDir(), "state", "skills.json"))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if !strings.Contains(string(stateData), "\"web-research\": false") {
+		t.Fatalf("expected persisted disabled state, got %q", string(stateData))
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/skills/reload", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected reload status 200, got %d", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	foundDisabled = false
+	for _, skill := range payload.Skills {
+		if skill.Name == "web-research" && !skill.Enabled {
+			foundDisabled = true
+			break
+		}
+	}
+	if !foundDisabled {
+		t.Fatalf("expected disabled state to survive reload, got %+v", payload.Skills)
+	}
+}
+
+func TestListSkillsEndpointIncludesHealthAndSchema(t *testing.T) {
+	handler, _, _, _, _, _, _, _ := newWebTestServer(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/skills", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var payload struct {
+		Health map[string]any `json:"health"`
+		Schema map[string]any `json:"schema"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Health["total_skills"] == nil {
+		t.Fatalf("expected health payload, got %+v", payload.Health)
+	}
+	if payload.Schema["manifest_fields"] == nil {
+		t.Fatalf("expected schema payload, got %+v", payload.Schema)
+	}
+}
+
+func TestSaveSkillManifestEndpointCreatesManifest(t *testing.T) {
+	handler, runtimeStore, _, _, _, _, _, _ := newWebTestServer(t)
+
+	body := `{"description":"Alias","uses":"web-search"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/skills/manifests/web-research", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(runtimeStore.RootDir(), "skills", "web-research.json")); err != nil {
+		t.Fatalf("expected manifest file to be written: %v", err)
+	}
+}
+
+func TestSkillsPageLoadsExistingManifestIntoEditor(t *testing.T) {
+	handler, runtimeStore, _, _, _, _, _, _ := newWebTestServer(t)
+
+	manifestDir := filepath.Join(runtimeStore.RootDir(), "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	raw := "{\n  \"version\": 1,\n  \"name\": \"web-research\",\n  \"uses\": \"web-search\"\n}\n"
+	if err := os.WriteFile(filepath.Join(manifestDir, "web-research.json"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ui/skills?manifest=web-research", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	body := html.UnescapeString(rec.Body.String())
+	if !strings.Contains(body, "\"name\": \"web-research\"") || !strings.Contains(body, "\"version\": 1") {
+		t.Fatalf("expected manifest content in editor, got %q", body)
+	}
+}
+
+func TestSkillsPageRendersRegistryAndManifestHealth(t *testing.T) {
+	handler, runtimeStore, _, _, _, _, _, _ := newWebTestServer(t)
+
+	manifestDir := filepath.Join(runtimeStore.RootDir(), "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(manifestDir, "bad-skill.json"), []byte("{\n  \"name\": \"Bad Skill\",\n  \"uses\": \"web-search\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ui/skills/reload", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after reload, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); !strings.Contains(got, "/ui/skills?error=") {
+		t.Fatalf("expected error redirect, got %q", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/ui/skills", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Skills") || !strings.Contains(body, "Manifest Health") {
+		t.Fatalf("expected skills management sections in page")
+	}
+	if !strings.Contains(body, "web-search") {
+		t.Fatalf("expected builtin skill in page")
+	}
+	if !strings.Contains(body, "bad-skill.json") {
+		t.Fatalf("expected manifest status path in page")
+	}
+}
+
+func TestSkillsPageToggleDisablesBuiltinSkill(t *testing.T) {
+	handler, _, _, _, _, _, runner, _ := newWebTestServer(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ui/skills/web-search/toggle", strings.NewReader("enabled=false"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after toggle, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); !strings.Contains(got, "/ui/skills?success=") {
+		t.Fatalf("expected success redirect, got %q", got)
+	}
+	foundDisabled := false
+	for _, skill := range runner.ListSkills() {
+		if skill.Name == "web-search" && !skill.Enabled {
+			foundDisabled = true
+		}
+	}
+	if !foundDisabled {
+		t.Fatalf("expected web-search to be disabled after toggle, got %+v", runner.ListSkills())
+	}
+}
+
+func TestSkillsPageSavesManifest(t *testing.T) {
+	handler, runtimeStore, _, _, _, _, _, _ := newWebTestServer(t)
+
+	form := url.Values{
+		"manifest_json": {`{"name":"web-research","description":"Alias","uses":"web-search"}`},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ui/skills/manifests", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after save, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); !strings.Contains(got, "/ui/skills?success=") {
+		t.Fatalf("expected success redirect, got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(runtimeStore.RootDir(), "skills", "web-research.json")); err != nil {
+		t.Fatalf("expected manifest file to exist: %v", err)
 	}
 }
 

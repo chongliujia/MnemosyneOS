@@ -10,6 +10,8 @@ const (
 	StepTypeRestartRuntime = "restart_runtime"
 	StepTypeConsolidate    = "consolidate_memory"
 	StepTypeSeedMemoryCard = "seed_memory_card"
+	StepTypeRequeueTask    = "requeue_task"
+	StepTypeScheduleMemory = "schedule_memory_consolidation"
 
 	AssertTaskState           = "task_state"
 	AssertSelectedSkill       = "selected_skill"
@@ -45,7 +47,11 @@ const (
 	AssertProcedureContains              = "procedure_contains"
 	AssertProcedureStepContains          = "procedure_step_contains"
 	AssertActionAttemptCount             = "action_attempt_count"
+	AssertActionFailureCategory          = "action_failure_category"
+	AssertActionReplayed                 = "action_replayed"
 	AssertRetrySucceeded                 = "retry_succeeded"
+	AssertSchedulerTriggered             = "scheduler_triggered"
+	AssertSchedulerSkipReason            = "scheduler_skip_reason"
 )
 
 type Scenario struct {
@@ -126,10 +132,15 @@ type StepReport struct {
 	ActionID                 string         `json:"action_id,omitempty"`
 	ActionStatus             string         `json:"action_status,omitempty"`
 	ActionFailureCategory    string         `json:"action_failure_category,omitempty"`
+	ActionReplayed           bool           `json:"action_replayed,omitempty"`
+	ReplayOfActionID         string         `json:"replay_of_action_id,omitempty"`
 	ActionAttempts           int            `json:"action_attempts,omitempty"`
 	RetryAttempts            int            `json:"retry_attempts,omitempty"`
 	RetrySucceeded           bool           `json:"retry_succeeded,omitempty"`
 	CardType                 string         `json:"card_type,omitempty"`
+	SchedulerTriggered       bool           `json:"scheduler_triggered,omitempty"`
+	SchedulerSkipReason      string         `json:"scheduler_skip_reason,omitempty"`
+	SchedulerCandidateCount  int            `json:"scheduler_candidate_count,omitempty"`
 	ApprovalID               string         `json:"approval_id,omitempty"`
 	UserContent              string         `json:"user_content,omitempty"`
 	AssistantContent         string         `json:"assistant_content,omitempty"`

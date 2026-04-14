@@ -34,8 +34,11 @@ type Action struct {
 }
 
 type Context struct {
-	RecentTasks []TaskRef   `json:"recent_tasks,omitempty"`
-	RecallHits  []RecallRef `json:"recall_hits,omitempty"`
+	RecentTasks   []TaskRef   `json:"recent_tasks,omitempty"`
+	WorkingNotes  []string    `json:"working_notes,omitempty"`
+	SemanticHits  []RecallRef `json:"semantic_hits,omitempty"`
+	ProcedureHits []RecallRef `json:"procedure_hits,omitempty"`
+	RecallHits    []RecallRef `json:"recall_hits,omitempty"`
 }
 
 type TaskResultEnvelope struct {
@@ -91,4 +94,8 @@ type SessionWorkset struct {
 	ArtifactPaths []string `json:"artifact_paths,omitempty"`
 	RecallCardIDs []string `json:"recall_card_ids,omitempty"`
 	SourceRefs    []string `json:"source_refs,omitempty"`
+}
+
+func (c *Context) isEmpty() bool {
+	return c == nil || (len(c.RecentTasks) == 0 && len(c.WorkingNotes) == 0 && len(c.SemanticHits) == 0 && len(c.ProcedureHits) == 0 && len(c.RecallHits) == 0)
 }

@@ -144,6 +144,56 @@ func TestSubmitTaskSelectsEmailInboxSkill(t *testing.T) {
 	}
 }
 
+func TestRequeueTaskResetsTransientExecutionState(t *testing.T) {
+	root := tempRuntimeRoot(t)
+	store := NewStore(root)
+	orch := NewOrchestrator(store)
+
+	task, err := orch.SubmitTask(CreateTaskRequest{
+		Title: "Retry failed shell task",
+		Goal:  "Run a shell command",
+		Metadata: map[string]string{
+			"last_action_id": "action-old",
+			"approval_token": "secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+	failed, err := store.MoveTask(task.TaskID, TaskStateFailed, func(t *Task) {
+		t.FailureReason = "process exit"
+		t.NextAction = "investigate failure"
+	})
+	if err != nil {
+		t.Fatalf("MoveTask returned error: %v", err)
+	}
+	requeued, err := orch.RequeueTask(failed.TaskID, "manual_test", nil)
+	if err != nil {
+		t.Fatalf("RequeueTask returned error: %v", err)
+	}
+	if requeued.State != TaskStatePlanned {
+		t.Fatalf("expected planned task, got %s", requeued.State)
+	}
+	if requeued.FailureReason != "" {
+		t.Fatalf("expected failure reason to be cleared, got %q", requeued.FailureReason)
+	}
+	if _, ok := requeued.Metadata["last_action_id"]; ok {
+		t.Fatalf("expected last_action_id to be cleared, got %#v", requeued.Metadata)
+	}
+	if _, ok := requeued.Metadata["approval_token"]; ok {
+		t.Fatalf("expected approval_token to be cleared, got %#v", requeued.Metadata)
+	}
+	if requeued.Metadata["rerun_count"] != "1" {
+		t.Fatalf("expected rerun_count=1, got %#v", requeued.Metadata)
+	}
+	if requeued.Metadata["last_rerun_trigger"] != "manual_test" {
+		t.Fatalf("expected last_rerun_trigger=manual_test, got %#v", requeued.Metadata)
+	}
+	if requeued.Metadata["last_rerun_from_state"] != TaskStateFailed {
+		t.Fatalf("expected last_rerun_from_state=failed, got %#v", requeued.Metadata)
+	}
+}
+
 func tempRuntimeRoot(t *testing.T) string {
 	t.Helper()
 

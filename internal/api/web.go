@@ -23,6 +23,7 @@ import (
 	"mnemosyneos/internal/memory"
 	"mnemosyneos/internal/model"
 	"mnemosyneos/internal/recall"
+	"mnemosyneos/internal/skills"
 )
 
 func (s *Server) registerWebRoutes(mux *http.ServeMux) {
@@ -43,6 +44,10 @@ func (s *Server) registerWebRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /ui/approvals/", s.handleWebApprovalAction)
 	mux.HandleFunc("GET /ui/recall", s.handleWebRecall)
 	mux.HandleFunc("GET /ui/memory", s.handleWebMemory)
+	mux.HandleFunc("GET /ui/skills", s.handleWebSkills)
+	mux.HandleFunc("POST /ui/skills/reload", s.handleWebReloadSkills)
+	mux.HandleFunc("POST /ui/skills/manifests", s.handleWebSaveSkillManifest)
+	mux.HandleFunc("POST /ui/skills/", s.handleWebSkillAction)
 	mux.HandleFunc("GET /ui/models", s.handleWebModels)
 	mux.HandleFunc("POST /ui/models", s.handleWebUpdateModels)
 	mux.HandleFunc("POST /ui/models/test", s.handleWebTestModels)
@@ -638,6 +643,15 @@ func (s *Server) handleWebChatTaskAction(w http.ResponseWriter, r *http.Request)
 	taskID := parts[0]
 	switch parts[1] {
 	case "run":
+		if task, err := s.runtimeStore.GetTask(taskID); err == nil {
+			switch task.State {
+			case airuntime.TaskStateFailed, airuntime.TaskStateBlocked:
+				if _, err := s.orchestrator.RequeueTask(taskID, "web_chat_run", nil); err != nil {
+					redirectChatSessionWithError(w, r, chatSessionFromForm(r), err)
+					return
+				}
+			}
+		}
 		if _, err := s.skillRunner.RunTask(taskID); err != nil {
 			redirectChatSessionWithError(w, r, chatSessionFromForm(r), err)
 			return
@@ -678,13 +692,12 @@ func (s *Server) handleWebChatApprovalAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		if record.TaskID != "" {
-			if _, err := s.runtimeStore.MoveTask(record.TaskID, airuntime.TaskStatePlanned, func(task *airuntime.Task) {
+			if _, err := s.orchestrator.RequeueTask(record.TaskID, "approval_granted", func(task *airuntime.Task) {
 				if task.Metadata == nil {
 					task.Metadata = map[string]string{}
 				}
 				task.Metadata["root_approval_id"] = approvalID
 				task.NextAction = "root approval granted; rerun task"
-				task.FailureReason = ""
 			}); err == nil {
 				_, _ = s.skillRunner.RunTask(record.TaskID)
 			}
@@ -881,13 +894,12 @@ func (s *Server) handleWebApprovalAction(w http.ResponseWriter, r *http.Request)
 		}
 		record, _ := s.approvalStore.Get(approvalID)
 		if record.TaskID != "" {
-			_, _ = s.runtimeStore.MoveTask(record.TaskID, airuntime.TaskStatePlanned, func(task *airuntime.Task) {
+			_, _ = s.orchestrator.RequeueTask(record.TaskID, "approval_granted", func(task *airuntime.Task) {
 				if task.Metadata == nil {
 					task.Metadata = map[string]string{}
 				}
 				task.Metadata["root_approval_id"] = approvalID
 				task.NextAction = "root approval granted; rerun task"
-				task.FailureReason = ""
 			})
 		}
 	case "deny":
@@ -983,6 +995,99 @@ func (s *Server) handleWebMemory(w http.ResponseWriter, r *http.Request) {
 		CardTypes:     summarizeMemoryTypes(cards),
 	}
 	renderTemplate(w, "memory", data)
+}
+
+func (s *Server) handleWebSkills(w http.ResponseWriter, r *http.Request) {
+	page := skillsPageData{
+		PageData: PageData{
+			Title: "Skills",
+			Nav:   navItems("skills"),
+		},
+		ManifestJSON:   defaultSkillManifestJSON(),
+		ErrorMessage:   strings.TrimSpace(r.URL.Query().Get("error")),
+		SuccessMessage: strings.TrimSpace(r.URL.Query().Get("success")),
+	}
+	if s.skillRunner != nil {
+		page.Skills = s.skillRunner.ListSkills()
+		page.ManifestStatuses = s.skillRunner.ListManifestStatuses()
+		if name := strings.TrimSpace(r.URL.Query().Get("manifest")); name != "" {
+			if raw, err := s.skillRunner.LoadManifestFile(name); err == nil {
+				page.ManifestJSON = raw
+			} else {
+				page.ErrorMessage = firstNonEmpty(page.ErrorMessage, err.Error())
+			}
+		}
+	}
+	renderTemplate(w, "skills", page)
+}
+
+func (s *Server) handleWebReloadSkills(w http.ResponseWriter, r *http.Request) {
+	if s.skillRunner == nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape("skill runner is not configured"), http.StatusSeeOther)
+		return
+	}
+	if err := s.skillRunner.ReloadSkills(); err != nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/ui/skills?success="+url.QueryEscape("skills reloaded"), http.StatusSeeOther)
+}
+
+func (s *Server) handleWebSaveSkillManifest(w http.ResponseWriter, r *http.Request) {
+	if s.skillRunner == nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape("skill runner is not configured"), http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	raw := strings.TrimSpace(r.FormValue("manifest_json"))
+	if raw == "" {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape("manifest_json is required"), http.StatusSeeOther)
+		return
+	}
+	var manifest skills.Manifest
+	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	if _, err := s.skillRunner.SaveManifest(manifest); err != nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/ui/skills?success="+url.QueryEscape(manifest.Name+" saved"), http.StatusSeeOther)
+}
+
+func (s *Server) handleWebSkillAction(w http.ResponseWriter, r *http.Request) {
+	if s.skillRunner == nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape("skill runner is not configured"), http.StatusSeeOther)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/ui/skills/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "toggle" {
+		writeError(w, http.StatusNotFound, "skill route not found")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	enabled := strings.EqualFold(strings.TrimSpace(r.FormValue("enabled")), "true")
+	if err := s.skillRunner.SetSkillEnabled(parts[0], enabled); err != nil {
+		http.Redirect(w, r, "/ui/skills?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	label := "disabled"
+	if enabled {
+		label = "enabled"
+	}
+	http.Redirect(w, r, "/ui/skills?success="+url.QueryEscape(parts[0]+" "+label), http.StatusSeeOther)
+}
+
+func defaultSkillManifestJSON() string {
+	return "{\n  \"name\": \"web-research\",\n  \"description\": \"Alias for web search with tuned defaults.\",\n  \"uses\": \"web-search\",\n  \"enabled\": true,\n  \"default_metadata\": {\n    \"query_style\": \"research\"\n  },\n  \"maintenance_policy\": {\n    \"enabled\": true,\n    \"scope\": \"project\",\n    \"allowed_card_types\": [\"web_result\"],\n    \"min_candidates\": 1\n  }\n}\n"
 }
 
 func (s *Server) handleWebPreview(w http.ResponseWriter, r *http.Request) {
@@ -1136,6 +1241,15 @@ type memoryPageData struct {
 	CardTypes     []memoryTypeCount
 }
 
+type skillsPageData struct {
+	PageData
+	Skills           []skills.Definition
+	ManifestStatuses []skills.ManifestStatus
+	ManifestJSON     string
+	ErrorMessage     string
+	SuccessMessage   string
+}
+
 type artifactPageData struct {
 	PageData
 	Path    string
@@ -1235,6 +1349,7 @@ func navItems(active string) []navItem {
 		{Name: "Approvals", Short: "AP", Href: "/ui/approvals"},
 		{Name: "Recall", Short: "RC", Href: "/ui/recall"},
 		{Name: "Memory", Short: "MM", Href: "/ui/memory"},
+		{Name: "Skills", Short: "SK", Href: "/ui/skills"},
 		{Name: "Models", Short: "AI", Href: "/ui/models"},
 	}
 	for i := range items {

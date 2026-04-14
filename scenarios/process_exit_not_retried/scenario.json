@@ -1,0 +1,64 @@
+{
+  "name": "process_exit_not_retried",
+  "description": "Run a shell command that exits non-zero and assert the executor does not retry process_exit failures.",
+  "tags": [
+    "execution",
+    "shell",
+    "retry",
+    "observability"
+  ],
+  "lane": "regression",
+  "steps": [
+    {
+      "id": "submit_shell_exit",
+      "type": "submit_task",
+      "title": "Run a non-retryable shell failure",
+      "goal": "Run a shell command that exits non-zero and should not be retried",
+      "selected_skill": "shell-command",
+      "metadata": {
+        "command": "python3",
+        "args": "-c \"import sys;sys.exit(7)\"",
+        "timeout_ms": "500",
+        "max_attempts": "3",
+        "idempotency_key": "process-exit-not-retried"
+      }
+    },
+    {
+      "id": "run_shell_exit",
+      "type": "run_task",
+      "task_ref": "submit_shell_exit"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "selected_skill",
+      "step": "run_shell_exit",
+      "equals": "shell-command"
+    },
+    {
+      "type": "task_state",
+      "step": "run_shell_exit",
+      "equals": "failed"
+    },
+    {
+      "type": "action_attempt_count",
+      "step": "run_shell_exit",
+      "expected": 1
+    },
+    {
+      "type": "action_failure_category",
+      "step": "run_shell_exit",
+      "equals": "process_exit"
+    },
+    {
+      "type": "retry_succeeded",
+      "step": "run_shell_exit",
+      "equals": "false"
+    },
+    {
+      "type": "observation_count",
+      "step": "run_shell_exit",
+      "min": 1
+    }
+  ]
+}

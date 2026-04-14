@@ -92,6 +92,42 @@ func DiffReports(left RunReport, leftPath string, right RunReport, rightPath str
 		if l.SelectedSkill != r.SelectedSkill {
 			appendDiff("%s selected_skill: %q != %q", prefix, l.SelectedSkill, r.SelectedSkill)
 		}
+		if l.SchedulerTriggered != r.SchedulerTriggered {
+			appendDiff("%s scheduler_triggered: %t != %t", prefix, l.SchedulerTriggered, r.SchedulerTriggered)
+		}
+		if l.SchedulerSkipReason != r.SchedulerSkipReason {
+			appendDiff("%s scheduler_skip_reason: %q != %q", prefix, l.SchedulerSkipReason, r.SchedulerSkipReason)
+		}
+		if l.SchedulerCandidateCount != r.SchedulerCandidateCount {
+			appendDiff("%s scheduler_candidate_count: %d != %d", prefix, l.SchedulerCandidateCount, r.SchedulerCandidateCount)
+		}
+		if l.ActionStatus != r.ActionStatus {
+			appendDiff("%s action_status: %q != %q", prefix, l.ActionStatus, r.ActionStatus)
+		}
+		if l.ActionFailureCategory != r.ActionFailureCategory {
+			appendDiff("%s action_failure_category: %q != %q", prefix, l.ActionFailureCategory, r.ActionFailureCategory)
+		}
+		if l.ActionReplayed != r.ActionReplayed {
+			appendDiff("%s action_replayed: %t != %t", prefix, l.ActionReplayed, r.ActionReplayed)
+		}
+		if l.ReplayOfActionID != r.ReplayOfActionID {
+			appendDiff("%s replay_of_action_id: %q != %q", prefix, l.ReplayOfActionID, r.ReplayOfActionID)
+		}
+		if l.ActionAttempts != r.ActionAttempts {
+			appendDiff("%s action_attempts: %d != %d", prefix, l.ActionAttempts, r.ActionAttempts)
+		}
+		if l.RetryAttempts != r.RetryAttempts {
+			appendDiff("%s retry_attempts: %d != %d", prefix, l.RetryAttempts, r.RetryAttempts)
+		}
+		if l.RetrySucceeded != r.RetrySucceeded {
+			appendDiff("%s retry_succeeded: %t != %t", prefix, l.RetrySucceeded, r.RetrySucceeded)
+		}
+		if l.MemoryFeedbackUpdates != r.MemoryFeedbackUpdates {
+			appendDiff("%s memory_feedback_updates: %d != %d", prefix, l.MemoryFeedbackUpdates, r.MemoryFeedbackUpdates)
+		}
+		if l.ProcedureFeedbackUpdates != r.ProcedureFeedbackUpdates {
+			appendDiff("%s procedure_feedback_updates: %d != %d", prefix, l.ProcedureFeedbackUpdates, r.ProcedureFeedbackUpdates)
+		}
 		if len(l.ArtifactPaths) != len(r.ArtifactPaths) {
 			appendDiff("%s artifact_count: %d != %d", prefix, len(l.ArtifactPaths), len(r.ArtifactPaths))
 		}

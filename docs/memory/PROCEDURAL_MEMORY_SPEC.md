@@ -24,8 +24,8 @@ Phase 1 keeps procedural memory intentionally small:
 - promoted through explicit consolidation
 - validated through harness assertions and scenarios
 
-Phase 1 does not yet include automatic extraction from repeated real runs.
-It does include a first extraction path from repeated successful task metadata.
+Phase 1 now includes a first deterministic extraction path from repeated successful runs.
+The extractor prefers structured observation and artifact evidence, and only falls back to task metadata when no evidence files are available.
 
 ## Card Shape
 
@@ -92,6 +92,12 @@ Inputs come from repeated successful tasks that expose:
 - optional `procedure_guardrails`
 - optional `procedure_summary`
 - optional `procedure_success_signal`
+
+Preferred evidence sources:
+
+- any runtime observation path recorded under a `*_observation` metadata key
+- any runtime artifact path recorded under a `*_artifact` metadata key
+- task metadata only as a fallback
 
 Extraction rules:
 

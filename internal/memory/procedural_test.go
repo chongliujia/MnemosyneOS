@@ -72,3 +72,58 @@ func TestBuildProcedureCandidatesFromRepeatedSuccessfulTasks(t *testing.T) {
 		t.Fatalf("unexpected steps content: %+v", card.Content)
 	}
 }
+
+func TestBuildProcedureCandidatesFromResolvedEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	tasks := []airuntime.Task{
+		{
+			TaskID:        "task-1",
+			State:         airuntime.TaskStateDone,
+			SelectedSkill: "task-plan",
+			CreatedAt:     now,
+			Metadata: map[string]string{
+				"task_class": "expense_audit",
+			},
+		},
+		{
+			TaskID:        "task-2",
+			State:         airuntime.TaskStateDone,
+			SelectedSkill: "task-plan",
+			CreatedAt:     now.Add(time.Second),
+			Metadata: map[string]string{
+				"task_class": "expense_audit",
+			},
+		},
+	}
+
+	candidates, result := BuildProcedureCandidates(ProcedureExtractionRequest{
+		Tasks:         tasks,
+		TaskClass:     "expense_audit",
+		SelectedSkill: "task-plan",
+		Scope:         ScopeProject,
+		MinRuns:       2,
+		EvidenceResolver: func(task airuntime.Task) ProcedureEvidence {
+			return ProcedureEvidence{
+				Steps:           "extract_fields\nvalidate_policy\nflag_missing_evidence",
+				Guardrails:      "never invent invoice ids",
+				Summary:         "Audit reimbursements with explicit policy validation.",
+				SuccessSignal:   "exceptions enumerated",
+				ArtifactPath:    "/tmp/" + task.TaskID + "-plan.md",
+				ObservationPath: "/tmp/" + task.TaskID + "-plan.json",
+			}
+		},
+	})
+	if result.Matched != 2 || result.Candidates != 1 {
+		t.Fatalf("unexpected extraction result: %+v", result)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected one candidate, got %d", len(candidates))
+	}
+	card := candidates[0]
+	if card.Content["artifact_path"] != "/tmp/task-1-plan.md" {
+		t.Fatalf("expected artifact path from evidence, got %+v", card.Content)
+	}
+	if card.Content["observation_path"] != "/tmp/task-1-plan.json" {
+		t.Fatalf("expected observation path from evidence, got %+v", card.Content)
+	}
+}

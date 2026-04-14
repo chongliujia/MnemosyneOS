@@ -2,6 +2,7 @@ package airuntime
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -112,7 +113,7 @@ func (o *Orchestrator) Advance() (Task, error) {
 }
 
 func (o *Orchestrator) ApproveTask(taskID, approvedBy string) (Task, error) {
-	task, err := o.store.MoveTask(taskID, TaskStatePlanned, func(t *Task) {
+	task, err := o.RequeueTask(taskID, "approval_granted", func(t *Task) {
 		t.RequiresApproval = false
 		t.Metadata["approved_by"] = approvedBy
 		t.NextAction = "approved for execution"
@@ -128,6 +129,47 @@ func (o *Orchestrator) DenyTask(taskID, deniedBy, reason string) (Task, error) {
 		t.FailureReason = firstNonEmpty(reason, "denied")
 		t.NextAction = "task denied"
 		t.Metadata["denied_by"] = deniedBy
+	})
+}
+
+func (o *Orchestrator) RequeueTask(taskID, trigger string, mutate func(*Task)) (Task, error) {
+	task, err := o.store.GetTask(taskID)
+	if err != nil {
+		return Task{}, err
+	}
+	switch task.State {
+	case TaskStatePlanned, TaskStateActive, TaskStateBlocked, TaskStateFailed, TaskStateAwaitingApproval:
+	default:
+		return Task{}, fmt.Errorf("task %s cannot be requeued from state %s", taskID, task.State)
+	}
+
+	state, err := o.store.LoadState()
+	if err != nil {
+		return Task{}, err
+	}
+	if state.ActiveTaskID != nil && *state.ActiveTaskID == taskID {
+		state.ActiveTaskID = nil
+		state.Status = "idle"
+		if err := o.store.SaveState(state); err != nil {
+			return Task{}, err
+		}
+	}
+
+	return o.store.MoveTask(taskID, TaskStatePlanned, func(t *Task) {
+		if t.Metadata == nil {
+			t.Metadata = map[string]string{}
+		}
+		delete(t.Metadata, "approval_token")
+		delete(t.Metadata, "last_action_id")
+		t.Metadata["rerun_count"] = incrementStringCounter(t.Metadata["rerun_count"])
+		t.Metadata["last_rerun_trigger"] = firstNonEmpty(trigger, "manual")
+		t.Metadata["last_rerun_from_state"] = task.State
+		t.Metadata["last_rerun_at"] = time.Now().UTC().Format(time.RFC3339)
+		t.FailureReason = ""
+		t.NextAction = "rerun requested"
+		if mutate != nil {
+			mutate(t)
+		}
 	})
 }
 
@@ -218,4 +260,16 @@ func referencesFileObject(text string) bool {
 		containsWord(text, "doc") ||
 		containsWord(text, "readme") ||
 		containsWord(text, "note")
+}
+
+func incrementStringCounter(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "1"
+	}
+	var value int
+	if _, err := fmt.Sscanf(raw, "%d", &value); err != nil || value < 0 {
+		return "1"
+	}
+	return fmt.Sprintf("%d", value+1)
 }

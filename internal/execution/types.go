@@ -33,6 +33,8 @@ type ActionRecord struct {
 	Attempt          int               `json:"attempt,omitempty"`
 	AttemptHistory   []ActionAttempt   `json:"attempt_history,omitempty"`
 	IdempotencyKey   string            `json:"idempotency_key,omitempty"`
+	Replayed         bool              `json:"replayed,omitempty"`
+	ReplayOfActionID string            `json:"replay_of_action_id,omitempty"`
 	Retryable        bool              `json:"retryable,omitempty"`
 	FailureCategory  string            `json:"failure_category,omitempty"`
 	Stdout           string            `json:"stdout,omitempty"`

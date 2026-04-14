@@ -1,0 +1,45 @@
+{
+  "name": "scheduled_memory_consolidation_no_eligible_candidates",
+  "description": "Scheduler should skip when candidate memories do not match the allowed card types.",
+  "tags": [
+    "memory",
+    "scheduler"
+  ],
+  "lane": "regression",
+  "steps": [
+    {
+      "id": "seed_candidate",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "candidate:file:type-1",
+        "card_type": "file_note",
+        "scope": "project",
+        "status": "candidate",
+        "source": "filesystem",
+        "confidence": "0.55",
+        "content.note": "non-eligible candidate"
+      }
+    },
+    {
+      "id": "schedule_memory",
+      "type": "schedule_memory_consolidation",
+      "metadata": {
+        "reason": "task_completion",
+        "scope": "project",
+        "allowed_card_types": "web_result,procedure"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "scheduler_triggered",
+      "step": "schedule_memory",
+      "equals": "false"
+    },
+    {
+      "type": "scheduler_skip_reason",
+      "step": "schedule_memory",
+      "equals": "no_eligible_candidates"
+    }
+  ]
+}

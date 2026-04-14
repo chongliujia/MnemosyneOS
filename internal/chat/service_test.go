@@ -377,6 +377,28 @@ func TestBuildFastContextSnapshotUsesSessionWorkingSet(t *testing.T) {
 	runtimeStore := airuntime.NewStore(runtimeRoot)
 	orchestrator := airuntime.NewOrchestrator(runtimeStore)
 	memoryStore := memory.NewStore()
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "procedure:expense-audit:v1",
+		CardType: "procedure",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusActive,
+		Content: map[string]any{
+			"summary": "Repository planning procedure with explicit approval validation.",
+		},
+	}); err != nil {
+		t.Fatalf("CreateCard returned error: %v", err)
+	}
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "search:test:summary",
+		CardType: "search_summary",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusActive,
+		Content: map[string]any{
+			"summary": "Focused task requires repository planning context.",
+		},
+	}); err != nil {
+		t.Fatalf("CreateCard returned error: %v", err)
+	}
 	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil)
 
 	task, err := runtimeStore.CreateTask(airuntime.CreateTaskRequest{
@@ -389,8 +411,10 @@ func TestBuildFastContextSnapshotUsesSessionWorkingSet(t *testing.T) {
 	}
 
 	ctx := service.buildFastContextSnapshot(SessionState{
-		SessionID:   "default",
-		FocusTaskID: task.TaskID,
+		SessionID:       "default",
+		Topic:           "repository planning",
+		PendingQuestion: "continue the focused thread?",
+		FocusTaskID:     task.TaskID,
 		WorkingSet: SessionWorkset{
 			RecallCardIDs: []string{"search:test:summary", "email:test:summary"},
 			SourceRefs:    []string{"web", "email"},
@@ -399,11 +423,80 @@ func TestBuildFastContextSnapshotUsesSessionWorkingSet(t *testing.T) {
 	if ctx == nil {
 		t.Fatalf("expected fast context snapshot")
 	}
+	if len(ctx.WorkingNotes) == 0 {
+		t.Fatalf("expected working notes in fast context")
+	}
 	if len(ctx.RecentTasks) != 1 || ctx.RecentTasks[0].TaskID != task.TaskID {
 		t.Fatalf("expected focused task in fast context, got %#v", ctx.RecentTasks)
 	}
-	if len(ctx.RecallHits) != 2 {
+	if len(ctx.ProcedureHits) != 1 {
+		t.Fatalf("expected procedure hit in fast context, got %#v", ctx.ProcedureHits)
+	}
+	if len(ctx.SemanticHits) == 0 {
+		t.Fatalf("expected semantic hits in fast context, got %#v", ctx.SemanticHits)
+	}
+	if len(ctx.RecallHits) < 2 {
 		t.Fatalf("expected working-set recall hits, got %#v", ctx.RecallHits)
+	}
+}
+
+func TestDirectReplyPromptIncludesMemorySections(t *testing.T) {
+	service := &Service{}
+	prompt := service.directReplyPrompt("继续", &Context{
+		WorkingNotes:  []string{"topic: reimbursement audit", "pending question: continue the summary?"},
+		SemanticHits:  []RecallRef{{CardID: "search:test:summary", Snippet: "User prefers concise audit summaries."}},
+		ProcedureHits: []RecallRef{{CardID: "procedure:expense-audit:v1", Snippet: "extract fields then validate policy"}},
+	}, "assistant: 已经总结了报销流程", "继续总结")
+
+	for _, snippet := range []string{
+		"Working memory:",
+		"Relevant long-term facts:",
+		"Relevant procedure guidance:",
+		"topic: reimbursement audit",
+		"extract fields then validate policy",
+	} {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected %q in prompt, got %q", snippet, prompt)
+		}
+	}
+}
+
+func TestFinalizeSessionStateRecordsMemoryUse(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	memoryStore := memory.NewStore()
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "procedure:expense-audit:v1",
+		CardType: "procedure",
+		Status:   memory.CardStatusActive,
+		Content:  map[string]any{"summary": "Audit reimbursements."},
+		Provenance: memory.Provenance{
+			Confidence: 0.7,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCard returned error: %v", err)
+	}
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil)
+	task, err := runtimeStore.CreateTask(airuntime.CreateTaskRequest{
+		Title:         "Audit reimbursements",
+		Goal:          "Audit reimbursements",
+		SelectedSkill: SkillMemoryConsolidate,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask returned error: %v", err)
+	}
+
+	service.finalizeSessionState("default", task, nil, "Done.", "task_request", &Context{
+		ProcedureHits: []RecallRef{{CardID: "procedure:expense-audit:v1", Source: "procedure", CardType: "procedure", Snippet: "extract fields then validate policy"}},
+	})
+
+	card := memoryStore.Query(memory.QueryRequest{CardID: "procedure:expense-audit:v1"}).Cards[0]
+	if card.Version != 2 {
+		t.Fatalf("expected memory use feedback to create new version, got %d", card.Version)
+	}
+	if card.Activation.LastAccessAt == nil {
+		t.Fatalf("expected last access time to be updated")
 	}
 }
 

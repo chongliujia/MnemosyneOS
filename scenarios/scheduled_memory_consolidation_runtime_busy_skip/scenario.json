@@ -1,0 +1,58 @@
+{
+  "name": "scheduled_memory_consolidation_runtime_busy_skip",
+  "description": "Scheduler should skip while another task is active, even if eligible candidates exist.",
+  "tags": [
+    "memory",
+    "scheduler",
+    "execution"
+  ],
+  "lane": "regression",
+  "steps": [
+    {
+      "id": "seed_candidate",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "candidate:web:busy-1",
+        "card_type": "web_result",
+        "scope": "project",
+        "status": "candidate",
+        "source": "web",
+        "confidence": "0.72",
+        "content.snippet": "eligible candidate while runtime is busy"
+      }
+    },
+    {
+      "id": "submit_active_task",
+      "type": "submit_task",
+      "title": "Plan active work",
+      "goal": "Create an active task to keep the runtime busy",
+      "selected_skill": "task-plan"
+    },
+    {
+      "id": "schedule_memory",
+      "type": "schedule_memory_consolidation",
+      "metadata": {
+        "reason": "task_completion",
+        "scope": "project",
+        "allowed_card_types": "web_result,procedure"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "submit_active_task",
+      "equals": "active"
+    },
+    {
+      "type": "scheduler_triggered",
+      "step": "schedule_memory",
+      "equals": "false"
+    },
+    {
+      "type": "scheduler_skip_reason",
+      "step": "schedule_memory",
+      "equals": "runtime_busy"
+    }
+  ]
+}

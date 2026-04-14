@@ -3,7 +3,9 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,6 +58,12 @@ func (s *Store) CreateCard(req CreateCardRequest) (Card, error) {
 			Score: 1.0,
 		},
 	}
+	if req.Activation != nil {
+		card.Activation.Score = clampUnit(req.Activation.Score)
+		card.Activation.LastAccessAt = req.Activation.LastAccessAt
+		card.Activation.LastEvaluatedAt = req.Activation.LastEvaluatedAt
+		card.Activation.DecayPolicy = req.Activation.DecayPolicy
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,9 +109,10 @@ func (s *Store) UpdateCard(cardID string, req UpdateCardRequest) (Card, error) {
 		EvidenceRefs: latest.EvidenceRefs,
 		Provenance:   latest.Provenance,
 		Activation: ActivationState{
-			Score:        latest.Activation.Score,
-			LastAccessAt: &now,
-			DecayPolicy:  latest.Activation.DecayPolicy,
+			Score:           latest.Activation.Score,
+			LastAccessAt:    &now,
+			LastEvaluatedAt: latest.Activation.LastEvaluatedAt,
+			DecayPolicy:     latest.Activation.DecayPolicy,
 		},
 	}
 
@@ -236,6 +245,35 @@ func (s *Store) LatestCards() []Card {
 	return cards
 }
 
+func (s *Store) TouchCard(cardID string, activationDelta, confidenceDelta float64) (Card, error) {
+	if strings.TrimSpace(cardID) == "" {
+		return Card{}, fmt.Errorf("%w: card_id is required", ErrInvalidArgument)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	versions, ok := s.cards[cardID]
+	if !ok || len(versions) == 0 {
+		return Card{}, ErrNotFound
+	}
+
+	latest := versions[len(versions)-1]
+	now := time.Now().UTC()
+	updated := latest
+	updated.Version = latest.Version + 1
+	updated.PrevVersion = latest.CardID + "#v" + fmt.Sprintf("%d", latest.Version)
+	updated.Activation = latest.Activation
+	updated.Activation.LastAccessAt = &now
+	updated.Activation.Score = clampUnit(latest.Activation.Score + activationDelta)
+	updated.Provenance = latest.Provenance
+	updated.Provenance.Confidence = clampUnit(latest.Provenance.Confidence + confidenceDelta)
+
+	versions = append(versions, updated)
+	s.cards[cardID] = versions
+	return updated, nil
+}
+
 func resolveAsOf(versions []Card, asOf *time.Time) *Card {
 	if len(versions) == 0 {
 		return nil
@@ -257,6 +295,10 @@ func resolveAsOf(versions []Card, asOf *time.Time) *Card {
 		return &card
 	}
 	return nil
+}
+
+func clampUnit(value float64) float64 {
+	return math.Max(0, math.Min(1, value))
 }
 
 func (s *Store) collectEdgesForCards(cardIDs []string) []Edge {

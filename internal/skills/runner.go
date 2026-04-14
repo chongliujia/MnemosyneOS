@@ -18,6 +18,7 @@ import (
 	"mnemosyneos/internal/connectors"
 	"mnemosyneos/internal/execution"
 	"mnemosyneos/internal/memory"
+	"mnemosyneos/internal/memoryscheduler"
 	"mnemosyneos/internal/model"
 )
 
@@ -42,6 +43,9 @@ type Runner struct {
 	runtimeStore *airuntime.Store
 	memoryStore  *memory.Store
 	consolidator *memory.Consolidator
+	registry     *Registry
+	manifests    []ManifestStatus
+	schedulerCfg memoryscheduler.Config
 	executor     *execution.Executor
 	connectors   *connectors.Runtime
 	approvals    *approval.Store
@@ -49,15 +53,156 @@ type Runner struct {
 }
 
 func NewRunner(runtimeStore *airuntime.Store, memoryStore *memory.Store, executor *execution.Executor, connectorRuntime *connectors.Runtime, approvalStore *approval.Store, textModel model.TextGateway) *Runner {
-	return &Runner{
+	runner := &Runner{
 		runtimeStore: runtimeStore,
 		memoryStore:  memoryStore,
 		consolidator: memory.NewConsolidator(memoryStore),
-		executor:     executor,
-		connectors:   connectorRuntime,
-		approvals:    approvalStore,
-		model:        textModel,
+		registry:     NewRegistry(),
+		schedulerCfg: memoryscheduler.Config{
+			Scope:             memory.ScopeProject,
+			Cooldown:          5 * time.Minute,
+			MinCandidates:     1,
+			AllowedCardTypes:  []string{"web_result", "email_thread", "email_message", "github_issue", "procedure"},
+			ExtractProcedures: true,
+			ProcedureMinRuns:  2,
+		},
+		executor:   executor,
+		connectors: connectorRuntime,
+		approvals:  approvalStore,
+		model:      textModel,
 	}
+	_ = runner.ReloadSkills()
+	return runner
+}
+
+func (r *Runner) RegisterSkill(def Definition) error {
+	if r == nil {
+		return fmt.Errorf("runner is nil")
+	}
+	if r.registry == nil {
+		r.registry = NewRegistry()
+	}
+	return r.registry.Register(def)
+}
+
+func (r *Runner) ListSkills() []Definition {
+	if r == nil || r.registry == nil {
+		return nil
+	}
+	return r.registry.List()
+}
+
+func (r *Runner) ListManifestStatuses() []ManifestStatus {
+	if r == nil || len(r.manifests) == 0 {
+		return nil
+	}
+	out := make([]ManifestStatus, len(r.manifests))
+	copy(out, r.manifests)
+	return out
+}
+
+func (r *Runner) registerBuiltins() {
+	must := func(def Definition) {
+		if err := r.RegisterSkill(def); err != nil {
+			panic(err)
+		}
+	}
+	must(Definition{
+		Name:        "task-plan",
+		Description: "Generate a task plan and supporting procedure evidence.",
+		Source:      "builtin",
+		Enabled:     true,
+		Handler:     (*Runner).runTaskPlan,
+		MaintenancePolicy: &MaintenancePolicy{
+			Enabled:          true,
+			Scope:            memory.ScopeProject,
+			AllowedCardTypes: []string{"procedure"},
+			MinCandidates:    1,
+		},
+	})
+	must(Definition{Name: "file-edit", Description: "Write files through the execution layer.", Source: "builtin", Enabled: true, Handler: (*Runner).runFileEdit})
+	must(Definition{Name: "file-read", Description: "Read files through the execution layer.", Source: "builtin", Enabled: true, Handler: (*Runner).runFileRead})
+	must(Definition{Name: "shell-command", Description: "Run shell commands through the execution layer.", Source: "builtin", Enabled: true, Handler: (*Runner).runShellCommand})
+	must(Definition{
+		Name:        "web-search",
+		Description: "Search the web and persist candidate memory.",
+		Source:      "builtin",
+		Enabled:     true,
+		Handler:     (*Runner).runWebSearch,
+		MaintenancePolicy: &MaintenancePolicy{
+			Enabled:          true,
+			Scope:            memory.ScopeProject,
+			AllowedCardTypes: []string{"web_result", "procedure"},
+			MinCandidates:    1,
+		},
+	})
+	must(Definition{
+		Name:        "github-issue-search",
+		Description: "Search GitHub issues and persist candidate memory.",
+		Source:      "builtin",
+		Enabled:     true,
+		Handler:     (*Runner).runGitHubIssueSearch,
+		MaintenancePolicy: &MaintenancePolicy{
+			Enabled:          true,
+			Scope:            memory.ScopeProject,
+			AllowedCardTypes: []string{"github_issue", "procedure"},
+			MinCandidates:    1,
+		},
+	})
+	must(Definition{
+		Name:        "email-inbox",
+		Description: "Read inbox messages and persist candidate memory.",
+		Source:      "builtin",
+		Enabled:     true,
+		Handler:     (*Runner).runEmailInbox,
+		MaintenancePolicy: &MaintenancePolicy{
+			Enabled:          true,
+			Scope:            memory.ScopeUser,
+			AllowedCardTypes: []string{"email_thread", "email_message", "procedure"},
+			MinCandidates:    1,
+		},
+	})
+	must(Definition{Name: "memory-consolidate", Description: "Promote candidate memory into active durable memory.", Source: "builtin", Enabled: true, Handler: (*Runner).runMemoryConsolidate})
+}
+
+func (r *Runner) ReloadSkills() error {
+	if r == nil {
+		return fmt.Errorf("runner is nil")
+	}
+	r.registry = NewRegistry()
+	r.registerBuiltins()
+	if r.runtimeStore == nil {
+		return r.applySkillStateOverrides()
+	}
+	if err := r.LoadSkillManifests(filepath.Join(r.runtimeStore.RootDir(), "skills")); err != nil {
+		return err
+	}
+	return r.applySkillStateOverrides()
+}
+
+func (r *Runner) SetSkillEnabled(name string, enabled bool) error {
+	if r == nil {
+		return fmt.Errorf("runner is nil")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("skill name is required")
+	}
+	if _, ok := r.registry.Resolve(name); !ok {
+		return fmt.Errorf("skill %s not registered", name)
+	}
+	state, err := r.loadSkillState()
+	if err != nil {
+		return err
+	}
+	if state.Enabled == nil {
+		state.Enabled = map[string]bool{}
+	}
+	state.Enabled[name] = enabled
+	if err := r.saveSkillState(state); err != nil {
+		return err
+	}
+	return r.ReloadSkills()
 }
 
 func (r *Runner) RunTask(taskID string) (RunResult, error) {
@@ -78,26 +223,34 @@ func (r *Runner) RunTaskWithProgress(taskID string, onProgress func(ProgressEven
 		return RunResult{}, fmt.Errorf("task %s is not runnable from state %s", taskID, task.State)
 	}
 
-	switch task.SelectedSkill {
-	case "task-plan":
-		return r.runTaskPlan(task, onProgress)
-	case "file-edit":
-		return r.runFileEdit(task, onProgress)
-	case "file-read":
-		return r.runFileRead(task, onProgress)
-	case "shell-command":
-		return r.runShellCommand(task, onProgress)
-	case "web-search":
-		return r.runWebSearch(task, onProgress)
-	case "github-issue-search":
-		return r.runGitHubIssueSearch(task, onProgress)
-	case "email-inbox":
-		return r.runEmailInbox(task, onProgress)
-	case "memory-consolidate":
-		return r.runMemoryConsolidate(task, onProgress)
-	default:
-		return r.runTaskPlan(task, onProgress)
+	skillName := strings.TrimSpace(task.SelectedSkill)
+	if skillName == "" {
+		skillName = "task-plan"
 	}
+	def, ok := r.registry.Resolve(skillName)
+	if !ok {
+		def, _ = r.registry.Resolve("task-plan")
+	}
+	if !def.Enabled {
+		return RunResult{}, fmt.Errorf("skill %s is disabled", skillName)
+	}
+	task = r.applySkillDefaults(task, def)
+	return def.Handler(r, task, onProgress)
+}
+
+func (r *Runner) applySkillDefaults(task airuntime.Task, def Definition) airuntime.Task {
+	if task.Metadata == nil {
+		task.Metadata = map[string]string{}
+	}
+	for key, value := range def.DefaultMetadata {
+		if strings.TrimSpace(task.Metadata[key]) == "" {
+			task.Metadata[key] = value
+		}
+	}
+	if strings.TrimSpace(task.ExecutionProfile) == "" && strings.TrimSpace(def.ExecutionProfile) != "" {
+		task.ExecutionProfile = strings.TrimSpace(def.ExecutionProfile)
+	}
+	return task
 }
 
 func (r *Runner) runTaskPlan(task airuntime.Task, onProgress func(ProgressEvent)) (RunResult, error) {
@@ -142,7 +295,7 @@ func (r *Runner) runTaskPlan(task airuntime.Task, onProgress func(ProgressEvent)
 	if err != nil {
 		return RunResult{}, err
 	}
-	if err := r.clearActiveTask(updated.TaskID); err != nil {
+	if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 		return RunResult{}, err
 	}
 	return RunResult{Task: updated, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
@@ -204,7 +357,7 @@ func (r *Runner) runFileEdit(task airuntime.Task, onProgress func(ProgressEvent)
 		if err != nil {
 			return RunResult{}, err
 		}
-		if err := r.clearActiveTask(updated.TaskID); err != nil {
+		if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 			return RunResult{}, err
 		}
 		return RunResult{Task: updated, Action: &action, ObservationPaths: []string{obsPath}}, nil
@@ -284,7 +437,7 @@ func (r *Runner) runFileRead(task airuntime.Task, onProgress func(ProgressEvent)
 		if err != nil {
 			return RunResult{}, err
 		}
-		if err := r.clearActiveTask(updated.TaskID); err != nil {
+		if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 			return RunResult{}, err
 		}
 		return RunResult{Task: updated, Action: &action, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
@@ -364,6 +517,8 @@ func (r *Runner) runShellCommand(task airuntime.Task, onProgress func(ProgressEv
 		"attempts":      len(action.AttemptHistory),
 		"retryable":     action.Retryable,
 		"failure_type":  action.FailureCategory,
+		"replayed":      action.Replayed,
+		"replay_of":     action.ReplayOfActionID,
 		"artifact_path": artifactPath,
 	})
 	if err != nil {
@@ -381,7 +536,7 @@ func (r *Runner) runShellCommand(task airuntime.Task, onProgress func(ProgressEv
 		if err != nil {
 			return RunResult{}, err
 		}
-		if err := r.clearActiveTask(updated.TaskID); err != nil {
+		if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 			return RunResult{}, err
 		}
 		return RunResult{Task: updated, Action: &action, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
@@ -397,7 +552,7 @@ func (r *Runner) runShellCommand(task airuntime.Task, onProgress func(ProgressEv
 	if err != nil {
 		return RunResult{}, err
 	}
-	if err := r.clearActiveTask(updated.TaskID); err != nil {
+	if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 		return RunResult{}, err
 	}
 	return RunResult{Task: updated, Action: &action, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
@@ -459,7 +614,7 @@ func (r *Runner) runWebSearch(task airuntime.Task, onProgress func(ProgressEvent
 	if err != nil {
 		return RunResult{}, err
 	}
-	if err := r.clearActiveTask(updated.TaskID); err != nil {
+	if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 		return RunResult{}, err
 	}
 	return RunResult{Task: updated, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
@@ -514,7 +669,7 @@ func (r *Runner) runGitHubIssueSearch(task airuntime.Task, onProgress func(Progr
 	if err != nil {
 		return RunResult{}, err
 	}
-	if err := r.clearActiveTask(updated.TaskID); err != nil {
+	if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 		return RunResult{}, err
 	}
 	return RunResult{Task: updated, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
@@ -569,7 +724,7 @@ func (r *Runner) runEmailInbox(task airuntime.Task, onProgress func(ProgressEven
 	if err != nil {
 		return RunResult{}, err
 	}
-	if err := r.clearActiveTask(updated.TaskID); err != nil {
+	if err := r.finalizeSuccessfulTask(updated, onProgress); err != nil {
 		return RunResult{}, err
 	}
 	return RunResult{Task: updated, ArtifactPaths: []string{artifactPath}, ObservationPaths: []string{obsPath}}, nil
@@ -879,6 +1034,48 @@ func (r *Runner) blockSearchTask(task airuntime.Task, reason string) (RunResult,
 	}
 	result.ObservationPaths = []string{obsPath}
 	return result, nil
+}
+
+func (r *Runner) finalizeSuccessfulTask(task airuntime.Task, onProgress func(ProgressEvent)) error {
+	if err := r.clearActiveTask(task.TaskID); err != nil {
+		return err
+	}
+	if task.State != airuntime.TaskStateDone {
+		return nil
+	}
+	scheduler, ok := r.schedulerForSkill(task.SelectedSkill)
+	if !ok {
+		return nil
+	}
+	decision, err := scheduler.EvaluateAndSchedule("task_completion")
+	if err != nil {
+		return nil
+	}
+	if decision.Triggered {
+		emitProgress(onProgress, "maintenance.schedule", "Queued memory consolidation maintenance.")
+	}
+	return nil
+}
+
+func (r *Runner) schedulerForSkill(selectedSkill string) (*memoryscheduler.Scheduler, bool) {
+	if r == nil || r.registry == nil {
+		return nil, false
+	}
+	def, ok := r.registry.Resolve(strings.TrimSpace(selectedSkill))
+	if !ok || !def.Enabled || def.MaintenancePolicy == nil || !def.MaintenancePolicy.Enabled {
+		return nil, false
+	}
+	config := r.schedulerCfg
+	if strings.TrimSpace(def.MaintenancePolicy.Scope) != "" {
+		config.Scope = strings.TrimSpace(def.MaintenancePolicy.Scope)
+	}
+	if len(def.MaintenancePolicy.AllowedCardTypes) > 0 {
+		config.AllowedCardTypes = append([]string(nil), def.MaintenancePolicy.AllowedCardTypes...)
+	}
+	if def.MaintenancePolicy.MinCandidates > 0 {
+		config.MinCandidates = def.MaintenancePolicy.MinCandidates
+	}
+	return memoryscheduler.New(r.runtimeStore, r.memoryStore, config), true
 }
 
 func (r *Runner) clearActiveTask(taskID string) error {

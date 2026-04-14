@@ -24,7 +24,13 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 		StepReports: []StepReport{
 			{Type: StepTypeConsolidate, CardType: "procedure", PromotedCount: 2, SupersededCount: 1},
 			{Type: StepTypeSendChat, MemoryFeedbackUpdates: 3, ProcedureFeedbackUpdates: 1},
-			{Type: StepTypeRunTask, RetryAttempts: 1, RetrySucceeded: true},
+			{Type: StepTypeRunTask, RetryAttempts: 1, RetrySucceeded: true, ActionReplayed: true},
+			{Type: StepTypeScheduleMemory, SchedulerTriggered: true},
+			{Type: StepTypeScheduleMemory, SchedulerSkipReason: "cooldown"},
+			{Type: StepTypeScheduleMemory, SchedulerSkipReason: "candidate_threshold"},
+			{Type: StepTypeScheduleMemory, SchedulerSkipReason: "no_eligible_candidates"},
+			{Type: StepTypeScheduleMemory, SchedulerSkipReason: "existing_consolidation_task"},
+			{Type: StepTypeScheduleMemory, SchedulerSkipReason: "runtime_busy"},
 		},
 	}
 	reportB := RunReport{
@@ -75,6 +81,17 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 	}
 	if rollup.ScenarioResults[0].RetryAttempts != 1 || rollup.ScenarioResults[0].RetrySuccesses != 1 {
 		t.Fatalf("expected retry counters to be tracked, got %+v", rollup.ScenarioResults[0])
+	}
+	if rollup.ScenarioResults[0].ActionReplays != 1 {
+		t.Fatalf("expected action replay counters to be tracked, got %+v", rollup.ScenarioResults[0])
+	}
+	if rollup.ScenarioResults[0].SchedulerTriggers != 1 ||
+		rollup.ScenarioResults[0].SchedulerCooldownSkips != 1 ||
+		rollup.ScenarioResults[0].SchedulerThresholdSkips != 1 ||
+		rollup.ScenarioResults[0].SchedulerTypeSkips != 1 ||
+		rollup.ScenarioResults[0].SchedulerExistingSkips != 1 ||
+		rollup.ScenarioResults[0].SchedulerBusySkips != 1 {
+		t.Fatalf("expected scheduler counters to be tracked, got %+v", rollup.ScenarioResults[0])
 	}
 }
 

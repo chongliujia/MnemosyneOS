@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,461 @@ func TestRunTaskPlanCompletesTask(t *testing.T) {
 	}
 	if len(result.ArtifactPaths) != 1 {
 		t.Fatalf("expected one artifact, got %d", len(result.ArtifactPaths))
+	}
+}
+
+func TestRegisterSkillDispatchesCustomHandler(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	if err := runner.RegisterSkill(Definition{
+		Name:        "custom-skill",
+		Description: "A test-only custom skill.",
+		Enabled:     true,
+		Handler: func(r *Runner, task airuntime.Task, _ func(ProgressEvent)) (RunResult, error) {
+			updated, err := r.runtimeStore.MoveTask(task.TaskID, airuntime.TaskStateDone, func(t *airuntime.Task) {
+				ensureMetadata(t)
+				t.NextAction = "custom skill completed"
+			})
+			if err != nil {
+				return RunResult{}, err
+			}
+			if err := r.clearActiveTask(updated.TaskID); err != nil {
+				return RunResult{}, err
+			}
+			return RunResult{Task: updated}, nil
+		},
+	}); err != nil {
+		t.Fatalf("RegisterSkill returned error: %v", err)
+	}
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:         "Run custom skill",
+		Goal:          "Verify registry dispatch",
+		SelectedSkill: "custom-skill",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	result, err := runner.RunTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if result.Task.State != airuntime.TaskStateDone {
+		t.Fatalf("expected done task, got %s", result.Task.State)
+	}
+}
+
+func TestRegisterSkillRejectsDuplicateNames(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	err = runner.RegisterSkill(Definition{
+		Name:    "task-plan",
+		Enabled: true,
+		Handler: func(r *Runner, task airuntime.Task, _ func(ProgressEvent)) (RunResult, error) {
+			return RunResult{Task: task}, nil
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected duplicate registration to fail")
+	}
+}
+
+func TestLoadSkillManifestRegistersAliasSkill(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	raw := []byte("{\n  \"name\": \"web-research\",\n  \"description\": \"Manifest alias for web search.\",\n  \"uses\": \"web-search\",\n  \"maintenance_policy\": {\n    \"enabled\": true,\n    \"scope\": \"project\",\n    \"allowed_card_types\": [\"web_result\"],\n    \"min_candidates\": 1\n  }\n}\n")
+	if err := os.WriteFile(filepath.Join(manifestDir, "web-research.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := runner.LoadSkillManifests(manifestDir); err != nil {
+		t.Fatalf("LoadSkillManifests returned error: %v", err)
+	}
+
+	def, ok := runner.registry.Resolve("web-research")
+	if !ok {
+		t.Fatalf("expected manifest skill to be registered")
+	}
+	if def.Source != "manifest" || def.Uses != "web-search" {
+		t.Fatalf("expected manifest metadata to be preserved, got %+v", def)
+	}
+	if def.MaintenancePolicy == nil || len(def.MaintenancePolicy.AllowedCardTypes) != 1 || def.MaintenancePolicy.AllowedCardTypes[0] != "web_result" {
+		t.Fatalf("expected maintenance policy override, got %+v", def.MaintenancePolicy)
+	}
+}
+
+func TestSetSkillEnabledPersistsDisabledManifestSkill(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	raw := []byte("{\n  \"name\": \"web-research\",\n  \"description\": \"Manifest alias for web search.\",\n  \"uses\": \"web-search\"\n}\n")
+	if err := os.WriteFile(filepath.Join(manifestDir, "web-research.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := runner.ReloadSkills(); err != nil {
+		t.Fatalf("ReloadSkills returned error: %v", err)
+	}
+	if err := runner.SetSkillEnabled("web-research", false); err != nil {
+		t.Fatalf("SetSkillEnabled returned error: %v", err)
+	}
+	def, ok := runner.registry.Resolve("web-research")
+	if !ok || def.Enabled {
+		t.Fatalf("expected manifest skill to remain registered but disabled, got %+v", def)
+	}
+	stateData, err := os.ReadFile(filepath.Join(runtimeRoot, "state", "skills.json"))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if !strings.Contains(string(stateData), "\"web-research\": false") {
+		t.Fatalf("expected persisted disabled state, got %q", string(stateData))
+	}
+}
+
+func TestSetSkillEnabledPersistsBuiltinSkill(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+
+	if err := runner.SetSkillEnabled("web-search", false); err != nil {
+		t.Fatalf("SetSkillEnabled returned error: %v", err)
+	}
+	def, ok := runner.registry.Resolve("web-search")
+	if !ok || def.Enabled {
+		t.Fatalf("expected builtin skill to remain registered but disabled, got %+v", def)
+	}
+	if err := runner.ReloadSkills(); err != nil {
+		t.Fatalf("ReloadSkills returned error: %v", err)
+	}
+	def, ok = runner.registry.Resolve("web-search")
+	if !ok || def.Enabled {
+		t.Fatalf("expected builtin disabled state to survive reload, got %+v", def)
+	}
+}
+
+func TestReloadSkillsCapturesManifestErrors(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(manifestDir, "good.json"), []byte("{\n  \"name\": \"web-research\",\n  \"uses\": \"web-search\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile good returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(manifestDir, "bad.json"), []byte("{\n  \"name\": \"Bad Skill\",\n  \"uses\": \"web-search\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile bad returned error: %v", err)
+	}
+
+	err = runner.ReloadSkills()
+	if err == nil {
+		t.Fatalf("expected reload to report manifest failure")
+	}
+	if _, ok := runner.registry.Resolve("web-research"); !ok {
+		t.Fatalf("expected valid manifest skill to remain loaded")
+	}
+	statuses := runner.ListManifestStatuses()
+	if len(statuses) != 2 {
+		t.Fatalf("expected two manifest statuses, got %d", len(statuses))
+	}
+	foundError := false
+	for _, status := range statuses {
+		if strings.Contains(status.Path, "bad.json") && status.Error != "" {
+			foundError = true
+		}
+	}
+	if !foundError {
+		t.Fatalf("expected invalid manifest status to capture error, got %+v", statuses)
+	}
+}
+
+func TestReloadSkillsRejectsUnsupportedManifestVersion(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	raw := []byte("{\n  \"version\": 2,\n  \"name\": \"web-research\",\n  \"uses\": \"web-search\"\n}\n")
+	if err := os.WriteFile(filepath.Join(manifestDir, "web-research.json"), raw, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	err = runner.ReloadSkills()
+	if err == nil || !strings.Contains(err.Error(), "unsupported manifest version 2") {
+		t.Fatalf("expected unsupported version error, got %v", err)
+	}
+}
+
+func TestLoadExternalManifestRunsCommandAdapter(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	scriptPath := filepath.Join(manifestDir, "external-skill.sh")
+	script := "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"state\":\"done\",\"next_action\":\"external complete\",\"metadata\":{\"external\":\"true\"},\"artifacts\":[{\"kind\":\"reports\",\"name\":\"external.md\",\"content\":\"# External Report\"}],\"observations\":[{\"kind\":\"os\",\"name\":\"external.json\",\"payload\":{\"summary\":\"ok\"}}]}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile script returned error: %v", err)
+	}
+	manifest := "{\n  \"name\": \"external-skill\",\n  \"description\": \"External command skill.\",\n  \"external\": {\n    \"kind\": \"command\",\n    \"command\": \"./external-skill.sh\",\n    \"timeout_ms\": 1500\n  }\n}\n"
+	if err := os.WriteFile(filepath.Join(manifestDir, "external-skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest returned error: %v", err)
+	}
+	if err := runner.ReloadSkills(); err != nil {
+		t.Fatalf("ReloadSkills returned error: %v", err)
+	}
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:         "Run external skill",
+		Goal:          "Verify external command adapter",
+		SelectedSkill: "external-skill",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+	result, err := runner.RunTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if result.Task.State != airuntime.TaskStateDone {
+		t.Fatalf("expected done task, got %s", result.Task.State)
+	}
+	if len(result.ArtifactPaths) != 1 || len(result.ObservationPaths) < 2 {
+		t.Fatalf("expected one artifact and telemetry-backed observations, got artifacts=%d observations=%d", len(result.ArtifactPaths), len(result.ObservationPaths))
+	}
+	artifactData, err := os.ReadFile(result.ArtifactPaths[0])
+	if err != nil {
+		t.Fatalf("ReadFile artifact returned error: %v", err)
+	}
+	if !strings.Contains(string(artifactData), "External Report") {
+		t.Fatalf("expected artifact content from external skill, got %q", string(artifactData))
+	}
+	stored, err := runtimeStore.GetTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask returned error: %v", err)
+	}
+	if stored.Metadata["external"] != "true" {
+		t.Fatalf("expected external metadata on task, got %+v", stored.Metadata)
+	}
+	if stored.Metadata["external_duration_ms"] == "" || stored.Metadata["external_telemetry_observation"] == "" {
+		t.Fatalf("expected external telemetry metadata, got %+v", stored.Metadata)
+	}
+}
+
+func TestLoadExternalManifestRejectsAbsoluteCommand(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	commandPath := "/bin/echo"
+	if runtime.GOOS == "windows" {
+		commandPath = `C:\Windows\System32\cmd.exe`
+	}
+	manifest := "{\n  \"name\": \"external-skill\",\n  \"external\": {\n    \"kind\": \"command\",\n    \"command\": \"" + strings.ReplaceAll(commandPath, `\`, `\\`) + "\"\n  }\n}\n"
+	if err := os.WriteFile(filepath.Join(manifestDir, "external-skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest returned error: %v", err)
+	}
+
+	err = runner.ReloadSkills()
+	if err == nil || !strings.Contains(err.Error(), "external.command must be relative") {
+		t.Fatalf("expected absolute command validation error, got %v", err)
+	}
+}
+
+func TestExternalSkillRootExecutionRequiresApprovalFlag(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	scriptPath := filepath.Join(manifestDir, "external-skill.sh")
+	script := "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"state\":\"done\"}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile script returned error: %v", err)
+	}
+	manifest := "{\n  \"name\": \"external-skill\",\n  \"external\": {\n    \"kind\": \"command\",\n    \"command\": \"./external-skill.sh\"\n  }\n}\n"
+	if err := os.WriteFile(filepath.Join(manifestDir, "external-skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest returned error: %v", err)
+	}
+	if err := runner.ReloadSkills(); err != nil {
+		t.Fatalf("ReloadSkills returned error: %v", err)
+	}
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:            "Run external skill as root",
+		Goal:             "Verify approval boundary",
+		SelectedSkill:    "external-skill",
+		ExecutionProfile: "root",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+	result, err := runner.RunTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if result.Task.State != airuntime.TaskStateFailed {
+		t.Fatalf("expected failed task, got %s", result.Task.State)
+	}
+	if !strings.Contains(result.Task.FailureReason, "require_approval=true") {
+		t.Fatalf("expected approval guard failure, got %q", result.Task.FailureReason)
+	}
+}
+
+func TestExternalSkillDoesNotExposeRuntimeRootByDefault(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+	manifestDir := filepath.Join(runtimeRoot, "skills")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	scriptPath := filepath.Join(manifestDir, "external-skill.sh")
+	script := "#!/bin/sh\ninput=$(cat)\ncase \"$input\" in\n  *'\"runtime_root\":\"\"'*) printf '%s' '{\"state\":\"done\",\"metadata\":{\"runtime_root_hidden\":\"true\"}}' ;;\n  *) printf '%s' '{\"state\":\"failed\",\"failure_reason\":\"runtime root leaked\"}' ;;\nesac\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile script returned error: %v", err)
+	}
+	manifest := "{\n  \"name\": \"external-skill\",\n  \"external\": {\n    \"kind\": \"command\",\n    \"command\": \"./external-skill.sh\"\n  }\n}\n"
+	if err := os.WriteFile(filepath.Join(manifestDir, "external-skill.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile manifest returned error: %v", err)
+	}
+	if err := runner.ReloadSkills(); err != nil {
+		t.Fatalf("ReloadSkills returned error: %v", err)
+	}
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:         "Run external skill",
+		Goal:          "Verify runtime root is hidden",
+		SelectedSkill: "external-skill",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+	result, err := runner.RunTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if result.Task.State != airuntime.TaskStateDone {
+		t.Fatalf("expected done task, got %s", result.Task.State)
+	}
+	stored, err := runtimeStore.GetTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask returned error: %v", err)
+	}
+	if stored.Metadata["runtime_root_hidden"] != "true" {
+		t.Fatalf("expected runtime root to stay hidden, got %+v", stored.Metadata)
 	}
 }
 
@@ -289,6 +745,60 @@ func TestRunMemoryConsolidatePersistsProcedureEvidence(t *testing.T) {
 	}
 }
 
+func TestRunMemoryConsolidateDoesNotRescheduleItself(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "candidate:web:1",
+		CardType: "web_result",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusCandidate,
+		Content:  map[string]any{"snippet": "candidate"},
+	}); err != nil {
+		t.Fatalf("CreateCard returned error: %v", err)
+	}
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:         "Consolidate procedure memory",
+		Goal:          "Consolidate procedure memory",
+		SelectedSkill: "memory-consolidate",
+		Metadata: map[string]string{
+			"card_type": "procedure",
+			"scope":     memory.ScopeProject,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	if _, err := runner.RunTask(task.TaskID); err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	maintenanceTasks := 0
+	for _, scheduled := range tasks {
+		if scheduled.SelectedSkill == "memory-consolidate" {
+			maintenanceTasks++
+		}
+	}
+	if maintenanceTasks != 1 {
+		t.Fatalf("expected exactly the original memory-consolidate task, got %d", maintenanceTasks)
+	}
+}
+
 func TestRunWebSearchCompletesTask(t *testing.T) {
 	runtimeRoot := tempSkillRuntimeRoot(t)
 	workspaceRoot := t.TempDir()
@@ -356,6 +866,216 @@ func TestRunWebSearchCompletesTask(t *testing.T) {
 	resultCard := memoryStore.Query(memory.QueryRequest{CardID: canonicalSearchResultCardID("https://example.com/a")})
 	if len(resultCard.Cards) != 1 {
 		t.Fatalf("expected one canonical result card, got %d", len(resultCard.Cards))
+	}
+}
+
+func TestRunWebSearchSchedulesMemoryMaintenance(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, connectors.NewRuntime(fakeSearchClient{
+		resp: connectors.SearchResponse{
+			Query:    "Search the web for docs",
+			Provider: "fake-search",
+			Results: []connectors.SearchResult{
+				{Title: "Docs", URL: "https://example.com/a", Snippet: "Alpha"},
+			},
+		},
+	}, fakeGitHubClient{}, fakeEmailClient{}), nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title: "Search docs",
+		Goal:  "Search the web for docs",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	if _, err := runner.RunTask(task.TaskID); err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	maintenanceTasks := 0
+	for _, scheduled := range tasks {
+		if scheduled.SelectedSkill != "memory-consolidate" {
+			continue
+		}
+		maintenanceTasks++
+		if scheduled.Metadata["scheduled_reason"] != "task_completion" {
+			t.Fatalf("expected scheduled_reason=task_completion, got %+v", scheduled.Metadata)
+		}
+	}
+	if maintenanceTasks != 1 {
+		t.Fatalf("expected one scheduled memory maintenance task, got %d", maintenanceTasks)
+	}
+}
+
+func TestRunWebSearchDoesNotScheduleFromEmailOnlyCandidates(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "candidate:email:1",
+		CardType: "email_thread",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusCandidate,
+		Content:  map[string]any{"subject": "email only"},
+	}); err != nil {
+		t.Fatalf("CreateCard returned error: %v", err)
+	}
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, connectors.NewRuntime(fakeSearchClient{
+		resp: connectors.SearchResponse{
+			Query:    "Search the web for docs",
+			Provider: "fake-search",
+			Results:  nil,
+		},
+	}, fakeGitHubClient{}, fakeEmailClient{}), nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title: "Search docs",
+		Goal:  "Search the web for docs",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	if _, err := runner.RunTask(task.TaskID); err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	maintenanceTasks := 0
+	for _, scheduled := range tasks {
+		if scheduled.SelectedSkill == "memory-consolidate" {
+			maintenanceTasks++
+		}
+	}
+	if maintenanceTasks != 0 {
+		t.Fatalf("expected no scheduled memory maintenance task from email-only candidates, got %d", maintenanceTasks)
+	}
+}
+
+func TestRunFileReadDoesNotScheduleMemoryMaintenance(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes.txt"), []byte("read me"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "candidate:web:1",
+		CardType: "web_result",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusCandidate,
+		Content:  map[string]any{"snippet": "candidate"},
+	}); err != nil {
+		t.Fatalf("CreateCard returned error: %v", err)
+	}
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title: "Read a file",
+		Goal:  "Read a file in the workspace",
+		Metadata: map[string]string{
+			"path": "notes.txt",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	if _, err := runner.RunTask(task.TaskID); err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	maintenanceTasks := 0
+	for _, scheduled := range tasks {
+		if scheduled.SelectedSkill == "memory-consolidate" {
+			maintenanceTasks++
+		}
+	}
+	if maintenanceTasks != 0 {
+		t.Fatalf("expected no scheduled memory maintenance task for file-read, got %d", maintenanceTasks)
+	}
+}
+
+func TestRunEmailInboxSchedulesMemoryMaintenanceFromEmailCandidates(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, connectors.NewRuntime(nil, fakeGitHubClient{}, fakeEmailClient{
+		resp: connectors.EmailResponse{
+			Provider: "maildir",
+			Results: []connectors.EmailMessage{
+				{MessageID: "<msg-1>", Subject: "Root approval required", From: "agent@example.com", Snippet: "Please approve root action", Unread: true, Date: "2026-03-23T10:00:00Z"},
+			},
+		},
+	}), nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title: "Check email inbox",
+		Goal:  "Check email inbox",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	if _, err := runner.RunTask(task.TaskID); err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	maintenanceTasks := 0
+	for _, scheduled := range tasks {
+		if scheduled.SelectedSkill != "memory-consolidate" {
+			continue
+		}
+		maintenanceTasks++
+	}
+	if maintenanceTasks != 1 {
+		t.Fatalf("expected one scheduled memory maintenance task from email candidates, got %d", maintenanceTasks)
 	}
 }
 

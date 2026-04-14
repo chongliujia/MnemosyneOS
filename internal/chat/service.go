@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"mnemosyneos/internal/airuntime"
+	"mnemosyneos/internal/memoryorchestrator"
 	"mnemosyneos/internal/model"
 	"mnemosyneos/internal/recall"
 	"mnemosyneos/internal/skills"
@@ -183,6 +184,7 @@ func (s *Service) Send(req SendRequest) (SendResponse, error) {
 		sessionState.LastAssistantAct = "followup_reply"
 		sessionState.PendingQuestion = ""
 		sessionState.PendingAction = ""
+		s.recordMemoryUse(fastContext, "followup_reply", "responded")
 		_ = s.store.SaveSessionState(sessionState)
 		return SendResponse{UserMessage: userMessage, AssistantMessage: assistantMessage}, nil
 	}
@@ -208,6 +210,7 @@ func (s *Service) Send(req SendRequest) (SendResponse, error) {
 		assistantMessage = s.composeDirectReply(text, fastContext, conversationContext, assistantMessage)
 		sessionState.LastUserAct = dialogue.Act
 		sessionState.LastAssistantAct = "direct_reply"
+		s.recordMemoryUse(fastContext, "direct_reply", "responded")
 		_ = s.store.SaveSessionState(sessionState)
 		return SendResponse{
 			UserMessage:      userMessage,
@@ -232,7 +235,7 @@ func (s *Service) Send(req SendRequest) (SendResponse, error) {
 		createReq.Metadata["chat_conversation_context"] = conversationContext
 	}
 	effectiveQuery := expandQueryWithConversation(text, conversationContext)
-	contextSnapshot := s.buildTaskContextSnapshot(effectiveQuery, sessionState)
+	contextSnapshot := s.buildTaskContextSnapshot(effectiveQuery, sessionState, createReq.SelectedSkill)
 	applyChatContextMetadata(&createReq, contextSnapshot)
 	if createReq.Metadata == nil {
 		createReq.Metadata = map[string]string{}
@@ -469,8 +472,26 @@ func (s *Service) assistantPrompt(task airuntime.Task, envelope TaskResultEnvelo
 		parts = append(parts, fmt.Sprintf("Observations: %d", len(envelope.ObservationPaths)))
 	}
 	if contextSnapshot != nil {
+		if len(contextSnapshot.WorkingNotes) > 0 {
+			parts = append(parts, "Working memory:")
+			for _, note := range contextSnapshot.WorkingNotes {
+				parts = append(parts, "- "+note)
+			}
+		}
+		if len(contextSnapshot.ProcedureHits) > 0 {
+			parts = append(parts, "Relevant procedure guidance:")
+			for _, hit := range contextSnapshot.ProcedureHits {
+				parts = append(parts, fmt.Sprintf("- %s / %s", hit.CardID, hit.Snippet))
+			}
+		}
+		if len(contextSnapshot.SemanticHits) > 0 {
+			parts = append(parts, "Relevant long-term facts:")
+			for _, hit := range contextSnapshot.SemanticHits {
+				parts = append(parts, fmt.Sprintf("- %s / %s / %s", hit.Source, hit.CardType, hit.Snippet))
+			}
+		}
 		if len(contextSnapshot.RecallHits) > 0 {
-			parts = append(parts, "Relevant memory:")
+			parts = append(parts, "Relevant episodic fallback:")
 			for _, hit := range contextSnapshot.RecallHits {
 				parts = append(parts, fmt.Sprintf("- %s / %s / %s", hit.Source, hit.CardType, hit.Snippet))
 			}
@@ -544,8 +565,26 @@ func (s *Service) directReplyPrompt(userText string, contextSnapshot *Context, c
 		"Fallback reply:",
 		fallback,
 	)
-	if contextSnapshot != nil && len(contextSnapshot.RecentTasks) > 0 {
-		parts = append(parts, "Recent runtime context is available, but only mention it if directly relevant.")
+	if contextSnapshot != nil {
+		if len(contextSnapshot.WorkingNotes) > 0 {
+			parts = append(parts, "Working memory:")
+			parts = append(parts, contextSnapshot.WorkingNotes...)
+		}
+		if len(contextSnapshot.SemanticHits) > 0 {
+			parts = append(parts, "Relevant long-term facts:")
+			for _, hit := range contextSnapshot.SemanticHits {
+				parts = append(parts, "- "+firstNonEmpty(strings.TrimSpace(hit.Snippet), hit.CardID))
+			}
+		}
+		if len(contextSnapshot.ProcedureHits) > 0 {
+			parts = append(parts, "Relevant procedure guidance:")
+			for _, hit := range contextSnapshot.ProcedureHits {
+				parts = append(parts, "- "+firstNonEmpty(strings.TrimSpace(hit.Snippet), hit.CardID))
+			}
+		}
+		if len(contextSnapshot.RecentTasks) > 0 {
+			parts = append(parts, "Recent runtime context is available, but only mention it if directly relevant.")
+		}
 	}
 	return strings.Join(parts, "\n")
 }
@@ -619,54 +658,16 @@ func (s *Service) hydrateMessage(message Message) Message {
 	return message
 }
 
-func (s *Service) buildTaskContextSnapshot(query string, state SessionState) *Context {
-	ctx := &Context{
-		RecentTasks: s.recentTasks(3),
-		RecallHits:  s.recallHits(query, 4),
-	}
-	if fast := s.buildFastContextSnapshot(state); fast != nil {
-		if len(ctx.RecentTasks) == 0 {
-			ctx.RecentTasks = fast.RecentTasks
-		}
-		if len(ctx.RecallHits) == 0 {
-			ctx.RecallHits = fast.RecallHits
-		}
-	}
-	if len(ctx.RecentTasks) == 0 && len(ctx.RecallHits) == 0 {
-		return nil
-	}
-	return ctx
+func (s *Service) buildTaskContextSnapshot(query string, state SessionState, selectedSkill string) *Context {
+	orchestrator := memoryorchestrator.New(s.recall, s.runtimeStore)
+	packet := orchestrator.BuildTaskPacket(query, selectedSkill, sessionViewFromState(state), taskRefsToPacketRefs(s.recentTasks(3)))
+	return contextFromPacket(packet)
 }
 
 func (s *Service) buildFastContextSnapshot(state SessionState) *Context {
-	ctx := &Context{}
-	if strings.TrimSpace(state.FocusTaskID) != "" && s.runtimeStore != nil {
-		if task, err := s.runtimeStore.GetTask(state.FocusTaskID); err == nil {
-			ctx.RecentTasks = append(ctx.RecentTasks, TaskRef{
-				TaskID:        task.TaskID,
-				Title:         task.Title,
-				State:         task.State,
-				SelectedSkill: task.SelectedSkill,
-			})
-		}
-	}
-	for i, cardID := range state.WorkingSet.RecallCardIDs {
-		if len(ctx.RecallHits) >= 3 {
-			break
-		}
-		source := ""
-		if i < len(state.WorkingSet.SourceRefs) {
-			source = state.WorkingSet.SourceRefs[i]
-		}
-		ctx.RecallHits = append(ctx.RecallHits, RecallRef{
-			Source: source,
-			CardID: cardID,
-		})
-	}
-	if len(ctx.RecentTasks) == 0 && len(ctx.RecallHits) == 0 {
-		return nil
-	}
-	return ctx
+	orchestrator := memoryorchestrator.New(s.recall, s.runtimeStore)
+	packet := orchestrator.BuildFastPacket(sessionViewFromState(state))
+	return contextFromPacket(packet)
 }
 
 func (s *Service) loadSessionState(sessionID string) SessionState {
@@ -995,6 +996,7 @@ func (s *Service) finalizeSessionState(sessionID string, task airuntime.Task, ru
 	state.WorkingSet = mergeWorkingSet(state.WorkingSet, workingSetFromRunResult(runResult, ctx))
 	state.PendingQuestion = extractPendingQuestion(assistantContent)
 	state.PendingAction = inferPendingAction(task, state.PendingQuestion)
+	s.recordMemoryUse(ctx, task.SelectedSkill, task.State)
 	_ = s.store.SaveSessionState(state)
 }
 
@@ -1049,6 +1051,98 @@ func dedupeStrings(values []string) []string {
 		}
 		seen[value] = struct{}{}
 		out = append(out, value)
+	}
+	return out
+}
+
+func sessionViewFromState(state SessionState) memoryorchestrator.SessionView {
+	return memoryorchestrator.SessionView{
+		Topic:            state.Topic,
+		FocusTaskID:      state.FocusTaskID,
+		PendingQuestion:  state.PendingQuestion,
+		PendingAction:    state.PendingAction,
+		LastAssistantAct: state.LastAssistantAct,
+		WorkingRecallIDs: append([]string{}, state.WorkingSet.RecallCardIDs...),
+		WorkingSources:   append([]string{}, state.WorkingSet.SourceRefs...),
+	}
+}
+
+func taskRefsToPacketRefs(in []TaskRef) []memoryorchestrator.TaskRef {
+	out := make([]memoryorchestrator.TaskRef, 0, len(in))
+	for _, task := range in {
+		out = append(out, memoryorchestrator.TaskRef{
+			TaskID:        task.TaskID,
+			Title:         task.Title,
+			State:         task.State,
+			SelectedSkill: task.SelectedSkill,
+		})
+	}
+	return out
+}
+
+func contextFromPacket(packet *memoryorchestrator.Packet) *Context {
+	if packet == nil || packet.IsEmpty() {
+		return nil
+	}
+	return &Context{
+		RecentTasks:   packetTaskRefsToContext(packet.RecentTasks),
+		WorkingNotes:  append([]string{}, packet.WorkingNotes...),
+		SemanticHits:  packetRecallRefsToContext(packet.SemanticHits),
+		ProcedureHits: packetRecallRefsToContext(packet.ProcedureHits),
+		RecallHits:    packetRecallRefsToContext(packet.RecallHits),
+	}
+}
+
+func packetTaskRefsToContext(in []memoryorchestrator.TaskRef) []TaskRef {
+	out := make([]TaskRef, 0, len(in))
+	for _, task := range in {
+		out = append(out, TaskRef{
+			TaskID:        task.TaskID,
+			Title:         task.Title,
+			State:         task.State,
+			SelectedSkill: task.SelectedSkill,
+		})
+	}
+	return out
+}
+
+func packetRecallRefsToContext(in []memoryorchestrator.RecallRef) []RecallRef {
+	out := make([]RecallRef, 0, len(in))
+	for _, hit := range in {
+		out = append(out, RecallRef{
+			Source:   hit.Source,
+			CardID:   hit.CardID,
+			CardType: hit.CardType,
+			Snippet:  hit.Snippet,
+		})
+	}
+	return out
+}
+
+func (s *Service) recordMemoryUse(ctx *Context, taskClass, outcome string) {
+	if s == nil || ctx == nil {
+		return
+	}
+	orchestrator := memoryorchestrator.New(s.recall, s.runtimeStore)
+	packet := &memoryorchestrator.Packet{
+		ProcedureHits: contextRecallRefsToPacket(ctx.ProcedureHits),
+		SemanticHits:  contextRecallRefsToPacket(ctx.SemanticHits),
+	}
+	_ = orchestrator.RecordPacketUse(packet, memoryorchestrator.UsageContext{
+		TaskClass: taskClass,
+		Outcome:   outcome,
+	})
+}
+
+func contextRecallRefsToPacket(in []RecallRef) []memoryorchestrator.RecallRef {
+	out := make([]memoryorchestrator.RecallRef, 0, len(in))
+	for _, hit := range in {
+		out = append(out, memoryorchestrator.RecallRef{
+			Source:   hit.Source,
+			CardID:   hit.CardID,
+			CardType: hit.CardType,
+			Snippet:  hit.Snippet,
+		})
 	}
 	return out
 }
@@ -1213,7 +1307,7 @@ func buildActions(task airuntime.Task) []Action {
 				Method: "post",
 			})
 		}
-	case airuntime.TaskStatePlanned, airuntime.TaskStateBlocked:
+	case airuntime.TaskStatePlanned, airuntime.TaskStateBlocked, airuntime.TaskStateFailed:
 		actions = append(actions, Action{
 			Label:  "Run Task",
 			Href:   "/ui/chat/tasks/" + task.TaskID + "/run",

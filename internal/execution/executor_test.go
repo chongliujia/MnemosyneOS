@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,6 +177,93 @@ func TestExecuteShellProcessExitNotRetryable(t *testing.T) {
 	}
 	if len(record.AttemptHistory) != 1 || record.AttemptHistory[0].FailureCategory != ActionFailureProcessExit {
 		t.Fatalf("expected one process-exit attempt, got %#v", record.AttemptHistory)
+	}
+}
+
+func TestExecuteShellReplaysCompletedActionForMatchingIdempotencyKey(t *testing.T) {
+	runtimeRoot := tempExecutionRoot(t)
+	workspaceRoot := t.TempDir()
+
+	store := NewStore(runtimeRoot)
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+
+	args := []string{"-c", "import pathlib; p=pathlib.Path('counter.txt'); n=int(p.read_text()) + 1 if p.exists() else 1; p.write_text(str(n)); print(n)"}
+	first, err := executor.ExecuteShell(ShellActionRequest{
+		Command:        "python3",
+		Args:           args,
+		Workdir:        ".",
+		IdempotencyKey: "counter-once",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteShell first returned error: %v", err)
+	}
+	second, err := executor.ExecuteShell(ShellActionRequest{
+		Command:        "python3",
+		Args:           args,
+		Workdir:        ".",
+		IdempotencyKey: "counter-once",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteShell second returned error: %v", err)
+	}
+	if first.Replayed {
+		t.Fatalf("expected first action to be fresh, got %+v", first)
+	}
+	if !second.Replayed {
+		t.Fatalf("expected second action to be replayed, got %+v", second)
+	}
+	if second.ReplayOfActionID != first.ActionID {
+		t.Fatalf("expected replay_of_action_id=%q, got %q", first.ActionID, second.ReplayOfActionID)
+	}
+	if strings.TrimSpace(second.Stdout) != "1" {
+		t.Fatalf("expected replayed stdout to stay 1, got %q", second.Stdout)
+	}
+	data, err := os.ReadFile(filepath.Join(workspaceRoot, "counter.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "1" {
+		t.Fatalf("expected counter file to remain 1, got %q", string(data))
+	}
+}
+
+func TestExecuteShellDifferentFingerprintDoesNotReplay(t *testing.T) {
+	runtimeRoot := tempExecutionRoot(t)
+	workspaceRoot := t.TempDir()
+
+	store := NewStore(runtimeRoot)
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+
+	first, err := executor.ExecuteShell(ShellActionRequest{
+		Command:        "python3",
+		Args:           []string{"-c", "print('alpha')"},
+		IdempotencyKey: "shared-key",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteShell first returned error: %v", err)
+	}
+	second, err := executor.ExecuteShell(ShellActionRequest{
+		Command:        "python3",
+		Args:           []string{"-c", "print('beta')"},
+		IdempotencyKey: "shared-key",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteShell second returned error: %v", err)
+	}
+	if second.Replayed {
+		t.Fatalf("expected different fingerprint not to replay, got %+v", second)
+	}
+	if first.ActionID == second.ActionID {
+		t.Fatalf("expected distinct action ids, got %q", first.ActionID)
+	}
+	if strings.TrimSpace(second.Stdout) != "beta" {
+		t.Fatalf("expected second stdout beta, got %q", second.Stdout)
 	}
 }
 

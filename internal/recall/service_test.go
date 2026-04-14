@@ -136,6 +136,38 @@ func TestRecallIncludesActiveProcedures(t *testing.T) {
 	}
 }
 
+func TestApplyFeedbackTouchesCards(t *testing.T) {
+	store := memory.NewStore()
+	mustCreateCard(t, store, memory.CreateCardRequest{
+		CardID:   "procedure:expense_audit:v1",
+		CardType: "procedure",
+		Status:   memory.CardStatusActive,
+		Content:  map[string]any{"summary": "Audit reimbursements with policy validation."},
+		Provenance: memory.Provenance{
+			Confidence: 0.7,
+		},
+	})
+
+	service := NewService(store)
+	if err := service.ApplyFeedback([]UsageFeedback{
+		{CardID: "procedure:expense_audit:v1", ActivationDelta: 0.1, ConfidenceDelta: 0.05},
+		{CardID: "procedure:expense_audit:v1", ActivationDelta: 0.05, ConfidenceDelta: 0.02},
+	}); err != nil {
+		t.Fatalf("ApplyFeedback returned error: %v", err)
+	}
+
+	card := store.Query(memory.QueryRequest{CardID: "procedure:expense_audit:v1"}).Cards[0]
+	if card.Version != 2 {
+		t.Fatalf("expected merged feedback to create one new version, got %d", card.Version)
+	}
+	if card.Activation.LastAccessAt == nil {
+		t.Fatalf("expected feedback to update last access time")
+	}
+	if card.Provenance.Confidence <= 0.76 {
+		t.Fatalf("expected feedback confidence increase, got %f", card.Provenance.Confidence)
+	}
+}
+
 func mustCreateCard(t *testing.T, store *memory.Store, req memory.CreateCardRequest) {
 	t.Helper()
 	if _, err := store.CreateCard(req); err != nil {

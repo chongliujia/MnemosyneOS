@@ -17,6 +17,7 @@ import (
 	"mnemosyneos/internal/chat"
 	"mnemosyneos/internal/execution"
 	"mnemosyneos/internal/memory"
+	"mnemosyneos/internal/memoryscheduler"
 	"mnemosyneos/internal/recall"
 	"mnemosyneos/internal/skills"
 )
@@ -289,6 +290,8 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 			report.ActionID = result.Action.ActionID
 			report.ActionStatus = result.Action.Status
 			report.ActionFailureCategory = result.Action.FailureCategory
+			report.ActionReplayed = result.Action.Replayed
+			report.ReplayOfActionID = result.Action.ReplayOfActionID
 			report.ActionAttempts = len(result.Action.AttemptHistory)
 			if report.ActionAttempts == 0 && result.Action.Attempt > 0 {
 				report.ActionAttempts = result.Action.Attempt
@@ -332,6 +335,45 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 			report.TaskState = updated.State
 			report.SelectedSkill = updated.SelectedSkill
 			e.lastTaskID = updated.TaskID
+		}
+		return nil
+
+	case StepTypeRequeueTask:
+		taskID, err := e.resolveTaskRef(step.TaskRef)
+		if err != nil {
+			return err
+		}
+		task, err := e.orchestrator.RequeueTask(taskID, firstNonEmpty(step.Metadata["trigger"], "harness_requeue"), nil)
+		if err != nil {
+			return err
+		}
+		report.TaskID = task.TaskID
+		report.TaskState = task.State
+		report.SelectedSkill = task.SelectedSkill
+		e.lastTaskID = task.TaskID
+		return nil
+
+	case StepTypeScheduleMemory:
+		scheduler := memoryscheduler.New(e.runtimeStore, e.memoryStore, memoryscheduler.Config{
+			Scope:             firstNonEmpty(strings.TrimSpace(step.Metadata["scope"]), memory.ScopeProject),
+			Cooldown:          time.Duration(parseInt(step.Metadata["cooldown_ms"], 0)) * time.Millisecond,
+			MinCandidates:     parseInt(step.Metadata["min_candidates"], 1),
+			AllowedCardTypes:  parseCSVList(step.Metadata["allowed_card_types"]),
+			ExtractProcedures: parseBool(step.Metadata["extract_procedures"]),
+			ProcedureMinRuns:  parseInt(step.Metadata["min_runs"], 2),
+		})
+		decision, err := scheduler.EvaluateAndSchedule(firstNonEmpty(strings.TrimSpace(step.Metadata["reason"]), "harness"))
+		if err != nil {
+			return err
+		}
+		report.SchedulerTriggered = decision.Triggered
+		report.SchedulerSkipReason = decision.SkipReason
+		report.SchedulerCandidateCount = decision.CandidateCount
+		report.TaskID = decision.TaskID
+		report.TaskState = decision.TaskState
+		report.SelectedSkill = decision.SelectedSkill
+		if decision.TaskID != "" {
+			e.lastTaskID = decision.TaskID
 		}
 		return nil
 
@@ -1073,6 +1115,28 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 		}
 		return evaluateCountAssertion(assertion, step.ActionAttempts, fmt.Sprintf("step %s action attempts", assertion.Step))
 
+	case AssertActionFailureCategory:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		expected := strings.TrimSpace(assertion.Equals)
+		if step.ActionFailureCategory == expected {
+			return passAssertion(assertion, fmt.Sprintf("step %s action_failure_category=%q", assertion.Step, step.ActionFailureCategory))
+		}
+		return failAssertion(assertion, fmt.Sprintf("step %s action_failure_category=%q expected=%q", assertion.Step, step.ActionFailureCategory, expected))
+
+	case AssertActionReplayed:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		expected := parseBool(assertion.Equals)
+		if step.ActionReplayed == expected {
+			return passAssertion(assertion, fmt.Sprintf("step %s action_replayed=%t", assertion.Step, step.ActionReplayed))
+		}
+		return failAssertion(assertion, fmt.Sprintf("step %s action_replayed=%t expected=%t", assertion.Step, step.ActionReplayed, expected))
+
 	case AssertRetrySucceeded:
 		step := e.stepReport(assertion.Step)
 		if step == nil {
@@ -1083,6 +1147,29 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 			return passAssertion(assertion, fmt.Sprintf("step %s retry_succeeded=%t", assertion.Step, step.RetrySucceeded))
 		}
 		return failAssertion(assertion, fmt.Sprintf("step %s retry_succeeded=%t expected=%t", assertion.Step, step.RetrySucceeded, expected))
+
+	case AssertSchedulerTriggered:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		expected := parseBool(assertion.Equals)
+		if step.SchedulerTriggered == expected {
+			return passAssertion(assertion, fmt.Sprintf("step %s scheduler_triggered=%t", assertion.Step, step.SchedulerTriggered))
+		}
+		return failAssertion(assertion, fmt.Sprintf("step %s scheduler_triggered=%t expected=%t skip_reason=%q", assertion.Step, step.SchedulerTriggered, expected, step.SchedulerSkipReason))
+
+	case AssertSchedulerSkipReason:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		actual := strings.TrimSpace(step.SchedulerSkipReason)
+		expected := strings.TrimSpace(assertion.Equals)
+		if actual == expected {
+			return passAssertion(assertion, fmt.Sprintf("step %s scheduler_skip_reason=%q", assertion.Step, actual))
+		}
+		return failAssertion(assertion, fmt.Sprintf("step %s scheduler_skip_reason=%q expected=%q", assertion.Step, actual, expected))
 
 	default:
 		return failAssertion(assertion, fmt.Sprintf("unsupported assertion type %q", assertion.Type))
@@ -1338,8 +1425,14 @@ func assertionDescription(assertion Assertion) string {
 		return fmt.Sprintf("recall query %q source %s does not contain %q", assertion.Query, firstNonEmpty(assertion.Source, "all"), assertion.Contains)
 	case AssertActionAttemptCount:
 		return fmt.Sprintf("action attempt count for %s", assertion.Step)
+	case AssertActionFailureCategory:
+		return fmt.Sprintf("action failure category for %s equals %q", assertion.Step, assertion.Equals)
+	case AssertActionReplayed:
+		return fmt.Sprintf("action replay flag for %s equals %q", assertion.Step, assertion.Equals)
 	case AssertRetrySucceeded:
 		return fmt.Sprintf("retry succeeded for %s equals %q", assertion.Step, assertion.Equals)
+	case AssertSchedulerTriggered:
+		return fmt.Sprintf("scheduler triggered for %s equals %q", assertion.Step, assertion.Equals)
 	default:
 		return assertion.Type
 	}
@@ -1424,6 +1517,22 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func parseCSVList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func procedureFields(card memory.Card) []string {

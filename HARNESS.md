@@ -34,6 +34,10 @@ Phase 1 focuses on a compact industrial baseline:
 17. `memory_usefulness_feedback`
 18. `memory_feedback_noop_direct_reply`
 19. `retryable_timeout_shell`
+20. `process_exit_not_retried`
+21. `idempotent_shell_replay`
+22. `failed_shell_manual_rerun`
+23. `scheduled_memory_consolidation_after_web_search`
 
 Each scenario runs inside an isolated runtime root and produces a run report.
 
@@ -124,6 +128,20 @@ Use this to validate:
 - session continuity after restart
 - working-memory recovery
 - replayable runtime reconstruction
+
+### `schedule_memory_consolidation`
+
+Probe the memory scheduler and optionally enqueue a `memory-consolidate` task.
+
+Supported fields:
+
+- `metadata.reason` (optional)
+- `metadata.scope` (optional)
+- `metadata.cooldown_ms` (optional)
+- `metadata.min_candidates` (optional)
+- `metadata.allowed_card_types` (optional, comma-separated)
+- `metadata.extract_procedures` (optional)
+- `metadata.min_runs` (optional)
 
 ### `consolidate_memory`
 
@@ -441,6 +459,24 @@ Fields:
 - `step`
 - `expected` or `min`
 
+### `action_failure_category`
+
+Assert a step action ended with the expected executor failure category.
+
+Fields:
+
+- `step`
+- `equals`
+
+### `action_replayed`
+
+Assert whether a step action reused a previously completed action via idempotent replay.
+
+Fields:
+
+- `step`
+- `equals` (`true` / `false`)
+
 ### `retry_succeeded`
 
 Assert whether a step only succeeded after one or more retries.
@@ -449,6 +485,24 @@ Fields:
 
 - `step`
 - `equals` (`true` / `false`)
+
+### `scheduler_triggered`
+
+Assert whether a scheduler step actually enqueued a consolidation task.
+
+Fields:
+
+- `step`
+- `equals` (`true` / `false`)
+
+### `scheduler_skip_reason`
+
+Assert why a scheduler step skipped instead of enqueueing maintenance.
+
+Fields:
+
+- `step`
+- `equals`
 
 ### `recall_contains`
 
@@ -587,6 +641,15 @@ go run ./cmd/mnemosyne-harness -rollup ./runs -tags chat,memory
 go run ./cmd/mnemosyne-harness -rollup ./runs -lane regression
 go run ./cmd/mnemosyne-harness -rollup ./runs -rollup-json ./runs/rollup.json
 ```
+
+Rollups now surface scheduler policy behavior as first-class counters:
+
+- `scheduler_triggers`
+- `scheduler_cooldown_skips`
+- `scheduler_threshold_skips`
+- `scheduler_type_skips`
+- `scheduler_existing_task_skips`
+- `scheduler_runtime_busy_skips`
 
 Save a golden baseline:
 

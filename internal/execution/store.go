@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -30,6 +31,12 @@ func (s *Store) Get(actionID string) (ActionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.getLocked(actionID)
+}
+
+func (s *Store) FindCompletedByIdempotency(kind, executionProfile, idempotencyKey, fingerprint string) (ActionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.findCompletedByIdempotencyLocked(kind, executionProfile, idempotencyKey, fingerprint)
 }
 
 func (s *Store) Move(record ActionRecord, nextStatus string) error {
@@ -113,6 +120,51 @@ func (s *Store) findLocked(actionID string) (ActionRecord, string, error) {
 		}
 	}
 	return ActionRecord{}, "", ErrActionNotFound
+}
+
+func (s *Store) findCompletedByIdempotencyLocked(kind, executionProfile, idempotencyKey, fingerprint string) (ActionRecord, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return ActionRecord{}, ErrActionNotFound
+	}
+	dir := filepath.Join(s.rootDir, "actions", ActionStatusCompleted)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ActionRecord{}, ErrActionNotFound
+		}
+		return ActionRecord{}, err
+	}
+	records := make([]ActionRecord, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var record ActionRecord
+		if err := s.readJSONFile(filepath.Join(dir, entry.Name()), &record); err != nil {
+			return ActionRecord{}, err
+		}
+		if record.Kind != kind {
+			continue
+		}
+		if record.ExecutionProfile != executionProfile {
+			continue
+		}
+		if strings.TrimSpace(record.IdempotencyKey) != idempotencyKey {
+			continue
+		}
+		if fingerprint != "" && strings.TrimSpace(record.Metadata["request_fingerprint"]) != fingerprint {
+			continue
+		}
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return ActionRecord{}, ErrActionNotFound
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].StartedAt.After(records[j].StartedAt)
+	})
+	return records[0], nil
 }
 
 func (s *Store) writeRecordLocked(record ActionRecord) error {

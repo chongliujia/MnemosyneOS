@@ -8,12 +8,24 @@ import (
 	"mnemosyneos/internal/airuntime"
 )
 
+type ProcedureEvidence struct {
+	Steps           string
+	Guardrails      string
+	Summary         string
+	SuccessSignal   string
+	ArtifactPath    string
+	ObservationPath string
+}
+
+type ProcedureEvidenceResolver func(task airuntime.Task) ProcedureEvidence
+
 type ProcedureExtractionRequest struct {
-	Tasks         []airuntime.Task
-	TaskClass     string
-	SelectedSkill string
-	Scope         string
-	MinRuns       int
+	Tasks            []airuntime.Task
+	TaskClass        string
+	SelectedSkill    string
+	Scope            string
+	MinRuns          int
+	EvidenceResolver ProcedureEvidenceResolver
 }
 
 type ProcedureExtractionResult struct {
@@ -52,12 +64,13 @@ func BuildProcedureCandidates(req ProcedureExtractionRequest) ([]CreateCardReque
 		if strings.TrimSpace(req.SelectedSkill) != "" && selectedSkill != strings.TrimSpace(req.SelectedSkill) {
 			continue
 		}
-		steps := strings.TrimSpace(task.Metadata["procedure_steps"])
+		evidence := resolveProcedureEvidence(task, req.EvidenceResolver)
+		steps := strings.TrimSpace(evidence.Steps)
 		if steps == "" {
 			continue
 		}
 		result.Matched++
-		signature := proceduralSignature(taskClass, selectedSkill, steps, strings.TrimSpace(task.Metadata["procedure_guardrails"]))
+		signature := proceduralSignature(taskClass, selectedSkill, steps, strings.TrimSpace(evidence.Guardrails))
 		groups[signature] = append(groups[signature], task)
 	}
 
@@ -66,12 +79,26 @@ func BuildProcedureCandidates(req ProcedureExtractionRequest) ([]CreateCardReque
 		if len(tasks) < minRuns {
 			continue
 		}
-		card := buildProcedureCandidate(signature, scope, tasks)
+		card := buildProcedureCandidate(signature, scope, tasks, req.EvidenceResolver)
 		out = append(out, card)
 		result.Candidates++
 		result.CandidateCards = append(result.CandidateCards, card.CardID)
 	}
 	return out, result
+}
+
+func resolveProcedureEvidence(task airuntime.Task, resolver ProcedureEvidenceResolver) ProcedureEvidence {
+	if resolver != nil {
+		if evidence := resolver(task); strings.TrimSpace(evidence.Steps) != "" {
+			return evidence
+		}
+	}
+	return ProcedureEvidence{
+		Steps:         strings.TrimSpace(task.Metadata["procedure_steps"]),
+		Guardrails:    strings.TrimSpace(task.Metadata["procedure_guardrails"]),
+		Summary:       strings.TrimSpace(task.Metadata["procedure_summary"]),
+		SuccessSignal: strings.TrimSpace(task.Metadata["procedure_success_signal"]),
+	}
 }
 
 func taskProcedureClass(task airuntime.Task) string {
@@ -81,17 +108,18 @@ func taskProcedureClass(task airuntime.Task) string {
 	return firstNonEmpty(strings.TrimSpace(task.Metadata["procedure_task_class"]), strings.TrimSpace(task.Metadata["task_class"]))
 }
 
-func buildProcedureCandidate(signature, scope string, tasks []airuntime.Task) CreateCardRequest {
+func buildProcedureCandidate(signature, scope string, tasks []airuntime.Task, resolver ProcedureEvidenceResolver) CreateCardRequest {
 	first := tasks[0]
 	taskClass := taskProcedureClass(first)
 	selectedSkill := strings.TrimSpace(first.SelectedSkill)
-	steps := strings.TrimSpace(first.Metadata["procedure_steps"])
-	guardrails := strings.TrimSpace(first.Metadata["procedure_guardrails"])
-	summary := strings.TrimSpace(first.Metadata["procedure_summary"])
+	evidence := resolveProcedureEvidence(first, resolver)
+	steps := strings.TrimSpace(evidence.Steps)
+	guardrails := strings.TrimSpace(evidence.Guardrails)
+	summary := strings.TrimSpace(evidence.Summary)
 	if summary == "" {
 		summary = fmt.Sprintf("Recommended procedure for %s using %s.", taskClass, firstNonEmpty(selectedSkill, "runtime"))
 	}
-	successSignal := strings.TrimSpace(first.Metadata["procedure_success_signal"])
+	successSignal := strings.TrimSpace(evidence.SuccessSignal)
 	if successSignal == "" {
 		successSignal = fmt.Sprintf("%d successful runs matched this procedure", len(tasks))
 	}
@@ -107,14 +135,16 @@ func buildProcedureCandidate(signature, scope string, tasks []airuntime.Task) Cr
 		Scope:    scope,
 		Status:   CardStatusCandidate,
 		Content: map[string]any{
-			"name":            procedureName(taskClass, selectedSkill),
-			"task_class":      taskClass,
-			"selected_skill":  selectedSkill,
-			"summary":         summary,
-			"steps":           steps,
-			"guardrails":      guardrails,
-			"success_signal":  successSignal,
-			"supporting_runs": supportingRuns,
+			"name":             procedureName(taskClass, selectedSkill),
+			"task_class":       taskClass,
+			"selected_skill":   selectedSkill,
+			"summary":          summary,
+			"steps":            steps,
+			"guardrails":       guardrails,
+			"success_signal":   successSignal,
+			"supporting_runs":  supportingRuns,
+			"artifact_path":    strings.TrimSpace(evidence.ArtifactPath),
+			"observation_path": strings.TrimSpace(evidence.ObservationPath),
 		},
 		Provenance: Provenance{
 			Source:     "procedure-extractor",

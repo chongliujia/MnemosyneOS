@@ -29,12 +29,42 @@ type Response struct {
 	Hits  []Hit  `json:"hits"`
 }
 
+type UsageFeedback struct {
+	CardID          string
+	ActivationDelta float64
+	ConfidenceDelta float64
+}
+
 type Service struct {
 	store *memory.Store
 }
 
 func NewService(store *memory.Store) *Service {
 	return &Service{store: store}
+}
+
+func (s *Service) ApplyFeedback(feedback []UsageFeedback) error {
+	if s == nil || s.store == nil || len(feedback) == 0 {
+		return nil
+	}
+	merged := map[string]UsageFeedback{}
+	for _, item := range feedback {
+		cardID := strings.TrimSpace(item.CardID)
+		if cardID == "" {
+			continue
+		}
+		current := merged[cardID]
+		current.CardID = cardID
+		current.ActivationDelta += item.ActivationDelta
+		current.ConfidenceDelta += item.ConfidenceDelta
+		merged[cardID] = current
+	}
+	for _, item := range merged {
+		if _, err := s.store.TouchCard(item.CardID, item.ActivationDelta, item.ConfidenceDelta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) Recall(req Request) Response {

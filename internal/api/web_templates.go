@@ -2801,4 +2801,91 @@ const webTemplateHTML = `
     </div>
   {{template "footer" .}}
 {{end}}
+
+{{define "skills"}}
+  {{template "header" .}}
+    <h1>Skills</h1>
+    <div class="sub">Manage builtin, manifest, and external skills without editing runtime dispatch code. This view shows the live registry plus manifest load health.</div>
+    <div class="split">
+      <div class="card stack">
+        <h2>Registry</h2>
+        {{if .SuccessMessage}}<div><span class="pill">{{.SuccessMessage}}</span></div>{{end}}
+        {{if .ErrorMessage}}<div><span class="pill danger">{{.ErrorMessage}}</span></div>{{end}}
+        <form method="post" action="/ui/skills/reload" class="inline">
+          <button type="submit" class="secondary">Reload Skills</button>
+        </form>
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Source</th><th>Execution</th><th>Maintenance</th><th>State</th></tr>
+          </thead>
+          <tbody>
+            {{range .Skills}}
+              <tr>
+                <td>
+                  <strong>{{.Name}}</strong>
+                  {{if .Uses}}<div class="muted">uses {{.Uses}}</div>{{end}}
+                  {{if .Description}}<div class="muted">{{.Description}}</div>{{end}}
+                  {{if .External}}<div class="muted">external {{.External.Kind}} · {{.External.Command}}</div>{{end}}
+                </td>
+                <td><span class="pill {{if eq .Source "builtin"}}warn{{end}}">{{if .Source}}{{.Source}}{{else}}runtime{{end}}</span></td>
+                <td>{{if .ExecutionProfile}}{{.ExecutionProfile}}{{else}}default{{end}}</td>
+                <td>
+                  {{if .MaintenancePolicy}}
+                    <div class="muted">{{if .MaintenancePolicy.Enabled}}enabled{{else}}disabled{{end}} · {{if .MaintenancePolicy.Scope}}{{.MaintenancePolicy.Scope}}{{else}}scope:any{{end}}</div>
+                    {{if .MaintenancePolicy.AllowedCardTypes}}<div class="muted">{{join .MaintenancePolicy.AllowedCardTypes ", "}}</div>{{end}}
+                  {{else}}
+                    <span class="muted">none</span>
+                  {{end}}
+                </td>
+                <td>
+                  <form method="post" action="/ui/skills/{{queryEscape .Name}}/toggle" class="inline">
+                    <input type="hidden" name="enabled" value="{{if .Enabled}}false{{else}}true{{end}}">
+                    <button type="submit" class="{{if .Enabled}}warn{{else}}secondary{{end}}">{{if .Enabled}}Disable{{else}}Enable{{end}}</button>
+                  </form>
+                </td>
+              </tr>
+            {{else}}
+              <tr><td colspan="5" class="muted">No skills registered.</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      <div class="card stack">
+        <h2>Manifest Health</h2>
+        {{if .ManifestStatuses}}
+          <div class="stack">
+            {{range .ManifestStatuses}}
+              <div class="decision-card">
+                <div class="dense-title">{{if .Name}}{{.Name}}{{else}}{{.Path}}{{end}}</div>
+                <div class="dense-sub">{{.Path}}</div>
+                <div style="margin-top:8px;">
+                  {{if .Loaded}}<span class="pill">loaded</span>{{else}}<span class="pill danger">error</span>{{end}}
+                  {{if .Version}}<span class="pill">v{{.Version}}</span>{{end}}
+                  {{if .Source}}<span class="pill warn">{{.Source}}</span>{{end}}
+                  {{if .Uses}}<span class="pill">uses {{.Uses}}</span>{{end}}
+                  {{if .ExternalKind}}<span class="pill">external {{.ExternalKind}}</span>{{end}}
+                </div>
+                {{if .Name}}<div style="margin-top:8px;"><a class="pill" href="/ui/skills?manifest={{queryEscape .Name}}">Edit</a></div>{{end}}
+                {{if .Error}}<div class="muted" style="margin-top:8px;">{{.Error}}</div>{{end}}
+              </div>
+            {{end}}
+          </div>
+        {{else}}
+          <div class="muted">No manifest files have been loaded yet.</div>
+        {{end}}
+      </div>
+    </div>
+    <div class="card stack" style="margin-top:18px;">
+      <h2>Save Manifest</h2>
+      <div class="muted">Register or update a manifest-backed skill by pasting JSON. This writes to the runtime skills directory and reloads the registry.</div>
+      <form method="post" action="/ui/skills/manifests" class="stack">
+        <div>
+          <label class="muted" for="manifest_json">Manifest JSON</label>
+          <textarea id="manifest_json" name="manifest_json" style="min-height:320px;font-family:'IBM Plex Mono',monospace;">{{.ManifestJSON}}</textarea>
+        </div>
+        <button type="submit">Save Manifest</button>
+      </form>
+    </div>
+  {{template "footer" .}}
+{{end}}
 `

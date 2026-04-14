@@ -1,0 +1,88 @@
+{
+  "name": "idempotent_shell_replay",
+  "description": "Run the same shell task twice with the same idempotency key and assert the second execution replays the completed result instead of re-running the command.",
+  "tags": [
+    "execution",
+    "shell",
+    "idempotency",
+    "observability"
+  ],
+  "lane": "regression",
+  "steps": [
+    {
+      "id": "submit_shell_first",
+      "type": "submit_task",
+      "title": "Run idempotent shell command first time",
+      "goal": "Run a shell command that increments a counter in the workspace",
+      "selected_skill": "shell-command",
+      "metadata": {
+        "command": "python3",
+        "args": "-c \"import pathlib; p=pathlib.Path('idempotent-shell-counter.txt'); n=int(p.read_text()) + 1 if p.exists() else 1; p.write_text(str(n)); print(n)\"",
+        "timeout_ms": "500",
+        "max_attempts": "1",
+        "idempotency_key": "idempotent-shell-counter"
+      }
+    },
+    {
+      "id": "run_shell_first",
+      "type": "run_task",
+      "task_ref": "submit_shell_first"
+    },
+    {
+      "id": "submit_shell_second",
+      "type": "submit_task",
+      "title": "Run idempotent shell command second time",
+      "goal": "Re-run the same shell command with the same idempotency key",
+      "selected_skill": "shell-command",
+      "metadata": {
+        "command": "python3",
+        "args": "-c \"import pathlib; p=pathlib.Path('idempotent-shell-counter.txt'); n=int(p.read_text()) + 1 if p.exists() else 1; p.write_text(str(n)); print(n)\"",
+        "timeout_ms": "500",
+        "max_attempts": "1",
+        "idempotency_key": "idempotent-shell-counter"
+      }
+    },
+    {
+      "id": "run_shell_second",
+      "type": "run_task",
+      "task_ref": "submit_shell_second"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_shell_first",
+      "equals": "done"
+    },
+    {
+      "type": "task_state",
+      "step": "run_shell_second",
+      "equals": "done"
+    },
+    {
+      "type": "action_replayed",
+      "step": "run_shell_first",
+      "equals": "false"
+    },
+    {
+      "type": "action_replayed",
+      "step": "run_shell_second",
+      "equals": "true"
+    },
+    {
+      "type": "action_attempt_count",
+      "step": "run_shell_second",
+      "expected": 1
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_shell_first",
+      "contains": "1"
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_shell_second",
+      "contains": "1"
+    }
+  ]
+}

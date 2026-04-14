@@ -1,0 +1,115 @@
+{
+  "name": "procedural_supersession_lifecycle",
+  "description": "Ensure a new candidate procedure can supersede an older active procedure while unused candidates are archived.",
+  "lane": "regression",
+  "tags": [
+    "memory",
+    "procedural",
+    "lifecycle",
+    "consolidation"
+  ],
+  "steps": [
+    {
+      "id": "seed_old_procedure",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "procedure:expense_audit:v1",
+        "card_type": "procedure",
+        "scope": "project",
+        "status": "active",
+        "source": "harness",
+        "confidence": "0.72",
+        "content.name": "expense_audit_task_plan",
+        "content.task_class": "expense_audit",
+        "content.summary": "Old procedure that skips policy validation.",
+        "content.steps": "extract_fields\nflag_missing_evidence"
+      }
+    },
+    {
+      "id": "seed_corrected_procedure",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "procedure:expense_audit:v2",
+        "card_type": "procedure",
+        "scope": "project",
+        "status": "candidate",
+        "supersedes": "procedure:expense_audit:v1",
+        "source": "harness",
+        "confidence": "0.93",
+        "content.name": "expense_audit_task_plan",
+        "content.task_class": "expense_audit",
+        "content.summary": "Corrected procedure with explicit policy validation.",
+        "content.steps": "extract_fields\nvalidate_policy\nflag_missing_evidence",
+        "content.guardrails": "never invent invoice ids"
+      }
+    },
+    {
+      "id": "seed_cold_candidate",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "procedure:expense_audit:v3",
+        "card_type": "procedure",
+        "scope": "project",
+        "status": "candidate",
+        "source": "harness",
+        "confidence": "0.4",
+        "content.name": "expense_audit_experimental",
+        "content.task_class": "expense_audit",
+        "content.summary": "Experimental candidate that should be archived.",
+        "content.steps": "extract_fields"
+      }
+    },
+    {
+      "id": "consolidate_procedures",
+      "type": "consolidate_memory",
+      "metadata": {
+        "card_type": "procedure",
+        "scope": "project",
+        "limit": "1",
+        "archive_remaining": "true"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "type": "durable_card_status",
+      "field": "procedure",
+      "contains": "skips policy validation",
+      "equals": "superseded"
+    },
+    {
+      "type": "durable_card_status",
+      "field": "procedure",
+      "contains": "explicit policy validation",
+      "equals": "active"
+    },
+    {
+      "type": "durable_card_supersedes",
+      "field": "procedure",
+      "contains": "explicit policy validation",
+      "equals": "procedure:expense_audit:v1"
+    },
+    {
+      "type": "durable_card_status",
+      "field": "procedure",
+      "contains": "Experimental candidate that should be archived",
+      "equals": "archived"
+    },
+    {
+      "type": "procedure_step_contains",
+      "contains": "validate_policy"
+    },
+    {
+      "type": "recall_contains",
+      "query": "expense audit validate policy",
+      "source": "procedure",
+      "contains": "validate_policy"
+    },
+    {
+      "type": "recall_not_contains",
+      "query": "expense audit validate policy",
+      "source": "procedure",
+      "contains": "skips policy validation"
+    }
+  ]
+}

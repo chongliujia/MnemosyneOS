@@ -3,6 +3,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"os"
@@ -80,6 +81,9 @@ func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
 	if req.TimeoutMS > 0 {
 		timeout = time.Duration(req.TimeoutMS) * time.Millisecond
 	}
+	metadata := cloneMetadata(req.Metadata)
+	fingerprint := executionFingerprint(ActionKindShell, profile, commandPath, workdir, fmt.Sprintf("%d", req.TimeoutMS), strings.Join(req.Args, "\x00"))
+	metadata["request_fingerprint"] = fingerprint
 
 	record := ActionRecord{
 		ActionID:         fmt.Sprintf("action-%d", time.Now().UTC().UnixNano()),
@@ -92,8 +96,13 @@ func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
 		Command:          commandPath,
 		Args:             req.Args,
 		Workdir:          workdir,
-		Metadata:         cloneMetadata(req.Metadata),
+		Metadata:         metadata,
 		StartedAt:        time.Now().UTC(),
+	}
+	if replayed, ok, err := e.tryReplay(record, fingerprint); err != nil {
+		return ActionRecord{}, err
+	} else if ok {
+		return replayed, nil
 	}
 	maxAttempts := normalizeMaxAttempts(req.MaxAttempts, record.Attempt)
 	if err := e.store.Save(record); err != nil {
@@ -160,6 +169,9 @@ func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, err
 	if err != nil {
 		return ActionRecord{}, err
 	}
+	metadata := cloneMetadata(req.Metadata)
+	fingerprint := executionFingerprint(ActionKindFileRead, profile, path)
+	metadata["request_fingerprint"] = fingerprint
 
 	record := ActionRecord{
 		ActionID:         fmt.Sprintf("action-%d", time.Now().UTC().UnixNano()),
@@ -170,8 +182,13 @@ func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, err
 		IdempotencyKey:   firstNonEmpty(req.IdempotencyKey, req.Metadata["idempotency_key"]),
 		ExecutionProfile: profile,
 		Path:             path,
-		Metadata:         cloneMetadata(req.Metadata),
+		Metadata:         metadata,
 		StartedAt:        time.Now().UTC(),
+	}
+	if replayed, ok, err := e.tryReplay(record, fingerprint); err != nil {
+		return ActionRecord{}, err
+	} else if ok {
+		return replayed, nil
 	}
 	if err := e.store.Save(record); err != nil {
 		return ActionRecord{}, err
@@ -226,6 +243,9 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 	if err != nil {
 		return ActionRecord{}, err
 	}
+	metadata := cloneMetadata(req.Metadata)
+	fingerprint := executionFingerprint(ActionKindFileWrite, profile, path, req.Content, fmt.Sprintf("%t", req.CreateParents))
+	metadata["request_fingerprint"] = fingerprint
 
 	record := ActionRecord{
 		ActionID:         fmt.Sprintf("action-%d", time.Now().UTC().UnixNano()),
@@ -237,8 +257,13 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 		ExecutionProfile: profile,
 		Path:             path,
 		ChangedFiles:     []string{path},
-		Metadata:         cloneMetadata(req.Metadata),
+		Metadata:         metadata,
 		StartedAt:        time.Now().UTC(),
+	}
+	if replayed, ok, err := e.tryReplay(record, fingerprint); err != nil {
+		return ActionRecord{}, err
+	} else if ok {
+		return replayed, nil
 	}
 	if err := e.store.Save(record); err != nil {
 		return ActionRecord{}, err
@@ -418,6 +443,18 @@ func normalizeMaxAttempts(explicit, attempt int) int {
 	return attempt
 }
 
+func performBackoff(attempt int) {
+	if attempt <= 1 {
+		return
+	}
+	// Cap the backoff to avoid excessively long sleeps during retries
+	ms := 100 * (1 << (attempt - 1))
+	if ms > 5000 {
+		ms = 5000
+	}
+	time.Sleep(time.Duration(ms) * time.Millisecond)
+}
+
 func shouldRetry(actionKind, failureCategory string, attempt, maxAttempts int) bool {
 	if attempt >= maxAttempts {
 		return false
@@ -425,9 +462,55 @@ func shouldRetry(actionKind, failureCategory string, attempt, maxAttempts int) b
 	switch actionKind {
 	case ActionKindShell:
 		return failureCategory == ActionFailureTimeout
+	case ActionKindFileRead, ActionKindFileWrite:
+		return failureCategory == ActionFailureIO
 	default:
 		return false
 	}
+}
+
+func (e *Executor) tryReplay(record ActionRecord, fingerprint string) (ActionRecord, bool, error) {
+	if strings.TrimSpace(record.IdempotencyKey) == "" {
+		return ActionRecord{}, false, nil
+	}
+	existing, err := e.store.FindCompletedByIdempotency(record.Kind, record.ExecutionProfile, record.IdempotencyKey, fingerprint)
+	if err != nil {
+		if errors.Is(err, ErrActionNotFound) {
+			return ActionRecord{}, false, nil
+		}
+		return ActionRecord{}, false, err
+	}
+	finishedAt := time.Now().UTC()
+	replayed := record
+	replayed.Status = ActionStatusCompleted
+	replayed.Replayed = true
+	replayed.ReplayOfActionID = existing.ActionID
+	replayed.Command = firstNonEmpty(replayed.Command, existing.Command)
+	replayed.Args = firstNonEmptySlice(replayed.Args, existing.Args)
+	replayed.Path = firstNonEmpty(replayed.Path, existing.Path)
+	replayed.Workdir = firstNonEmpty(replayed.Workdir, existing.Workdir)
+	replayed.ChangedFiles = firstNonEmptySlice(replayed.ChangedFiles, existing.ChangedFiles)
+	replayed.Stdout = existing.Stdout
+	replayed.Stderr = existing.Stderr
+	replayed.ExitCode = existing.ExitCode
+	replayed.StartedAt = time.Now().UTC()
+	replayed.FinishedAt = &finishedAt
+	replayed.AttemptHistory = []ActionAttempt{{
+		Attempt:    replayed.Attempt,
+		Status:     ActionStatusCompleted,
+		StartedAt:  replayed.StartedAt,
+		FinishedAt: &finishedAt,
+	}}
+	if err := e.store.Save(replayed); err != nil {
+		return ActionRecord{}, false, err
+	}
+	return replayed, true, nil
+}
+
+func executionFingerprint(parts ...string) string {
+	joined := strings.Join(parts, "\x1f")
+	sum := sha1.Sum([]byte(joined))
+	return fmt.Sprintf("%x", sum)
 }
 
 func (e *Executor) runShellAttempt(commandPath string, args []string, workdir string, timeout time.Duration) shellAttemptResult {
@@ -479,6 +562,18 @@ func errorString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func firstNonEmptySlice[T any](primary, fallback []T) []T {
+	if len(primary) > 0 {
+		return primary
+	}
+	if len(fallback) == 0 {
+		return nil
+	}
+	out := make([]T, len(fallback))
+	copy(out, fallback)
+	return out
 }
 
 func timestampPtr(ts time.Time) *time.Time {

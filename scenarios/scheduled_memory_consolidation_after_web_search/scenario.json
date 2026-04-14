@@ -1,0 +1,78 @@
+{
+  "name": "scheduled_memory_consolidation_after_web_search",
+  "description": "A web search should auto-schedule memory consolidation after producing candidate memories; an explicit scheduler probe should see cooldown and still reference the scheduled task.",
+  "tags": [
+    "memory",
+    "scheduler",
+    "connector",
+    "web"
+  ],
+  "lane": "regression",
+  "fixtures": {
+    "search_response_file": "fixtures/search_response.json"
+  },
+  "steps": [
+    {
+      "id": "submit_search",
+      "type": "submit_task",
+      "title": "Search OpenClaw memory design",
+      "goal": "Search the web for OpenClaw memory design",
+      "selected_skill": "web-search",
+      "metadata": {
+        "query": "OpenClaw memory design"
+      }
+    },
+    {
+      "id": "run_search",
+      "type": "run_task",
+      "task_ref": "submit_search"
+    },
+    {
+      "id": "schedule_memory",
+      "type": "schedule_memory_consolidation",
+      "metadata": {
+        "reason": "task_completion",
+        "scope": "project"
+      }
+    },
+    {
+      "id": "run_memory_task",
+      "type": "run_task",
+      "task_ref": "schedule_memory"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_search",
+      "equals": "done"
+    },
+    {
+      "type": "scheduler_triggered",
+      "step": "schedule_memory",
+      "equals": "false"
+    },
+    {
+      "type": "selected_skill",
+      "step": "schedule_memory",
+      "equals": "memory-consolidate"
+    },
+    {
+      "type": "task_state",
+      "step": "run_memory_task",
+      "equals": "done"
+    },
+    {
+      "type": "durable_card_status",
+      "field": "web_result",
+      "contains": "hybrid retrieval",
+      "equals": "active"
+    },
+    {
+      "type": "recall_contains",
+      "query": "OpenClaw hybrid retrieval",
+      "source": "web",
+      "contains": "hybrid retrieval"
+    }
+  ]
+}
