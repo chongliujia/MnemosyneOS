@@ -20,21 +20,27 @@ type Rollup struct {
 }
 
 type ScenarioStats struct {
-	ScenarioName        string   `json:"scenario_name"`
-	RunCount            int      `json:"run_count"`
-	PassedCount         int      `json:"passed_count"`
-	FailedCount         int      `json:"failed_count"`
-	AssertionCount      int      `json:"assertion_count"`
-	FailedAssertions    int      `json:"failed_assertions"`
-	WorkingAssertions   int      `json:"working_assertions,omitempty"`
-	DurableAssertions   int      `json:"durable_assertions,omitempty"`
-	RecallAssertions    int      `json:"recall_assertions,omitempty"`
-	ProcedureAssertions int      `json:"procedure_assertions,omitempty"`
-	MemoryFailures      int      `json:"memory_failures,omitempty"`
-	AverageDurationMS   int64    `json:"average_duration_ms"`
-	LatestRunDir        string   `json:"latest_run_dir,omitempty"`
-	LatestError         string   `json:"latest_error,omitempty"`
-	TopFailureMessages  []string `json:"top_failure_messages,omitempty"`
+	ScenarioName             string   `json:"scenario_name"`
+	RunCount                 int      `json:"run_count"`
+	PassedCount              int      `json:"passed_count"`
+	FailedCount              int      `json:"failed_count"`
+	AssertionCount           int      `json:"assertion_count"`
+	FailedAssertions         int      `json:"failed_assertions"`
+	WorkingAssertions        int      `json:"working_assertions,omitempty"`
+	DurableAssertions        int      `json:"durable_assertions,omitempty"`
+	RecallAssertions         int      `json:"recall_assertions,omitempty"`
+	ProcedureAssertions      int      `json:"procedure_assertions,omitempty"`
+	ProcedurePromotions      int      `json:"procedure_promotions,omitempty"`
+	ProcedureSupersedes      int      `json:"procedure_supersessions,omitempty"`
+	MemoryFeedbackUpdates    int      `json:"memory_feedback_updates,omitempty"`
+	ProcedureFeedbackUpdates int      `json:"procedure_feedback_updates,omitempty"`
+	RetryAttempts            int      `json:"retry_attempts,omitempty"`
+	RetrySuccesses           int      `json:"retry_successes,omitempty"`
+	MemoryFailures           int      `json:"memory_failures,omitempty"`
+	AverageDurationMS        int64    `json:"average_duration_ms"`
+	LatestRunDir             string   `json:"latest_run_dir,omitempty"`
+	LatestError              string   `json:"latest_error,omitempty"`
+	TopFailureMessages       []string `json:"top_failure_messages,omitempty"`
 }
 
 func BuildRollup(root string) (Rollup, error) {
@@ -108,6 +114,19 @@ func BuildRollupWithScope(root string, tags []string, lane string) (Rollup, erro
 				key := firstNonEmpty(assertion.Details, assertion.Description, assertion.Type)
 				entry.failures[key]++
 			}
+		}
+		for _, step := range report.StepReports {
+			entry.stats.MemoryFeedbackUpdates += step.MemoryFeedbackUpdates
+			entry.stats.ProcedureFeedbackUpdates += step.ProcedureFeedbackUpdates
+			entry.stats.RetryAttempts += step.RetryAttempts
+			if step.RetrySucceeded {
+				entry.stats.RetrySuccesses++
+			}
+			if step.Type != StepTypeConsolidate || strings.TrimSpace(step.CardType) != "procedure" {
+				continue
+			}
+			entry.stats.ProcedurePromotions += step.PromotedCount
+			entry.stats.ProcedureSupersedes += step.SupersededCount
 		}
 		entry.totalDuration += report.FinishedAt.Sub(report.StartedAt)
 		if report.StartedAt.After(parseLatestRunTime(entry.stats.LatestRunDir)) {
@@ -263,6 +282,30 @@ func RenderRollupText(rollup Rollup) string {
 				scenario.MemoryFailures,
 			),
 		)
+		if scenario.MemoryFeedbackUpdates > 0 || scenario.ProcedureFeedbackUpdates > 0 {
+			lines = append(lines,
+				fmt.Sprintf("  memory_feedback_updates=%d procedure_feedback_updates=%d",
+					scenario.MemoryFeedbackUpdates,
+					scenario.ProcedureFeedbackUpdates,
+				),
+			)
+		}
+		if scenario.RetryAttempts > 0 || scenario.RetrySuccesses > 0 {
+			lines = append(lines,
+				fmt.Sprintf("  retry_attempts=%d retry_successes=%d",
+					scenario.RetryAttempts,
+					scenario.RetrySuccesses,
+				),
+			)
+		}
+		if scenario.ProcedurePromotions > 0 || scenario.ProcedureSupersedes > 0 {
+			lines = append(lines,
+				fmt.Sprintf("  procedure_promotions=%d procedure_supersessions=%d",
+					scenario.ProcedurePromotions,
+					scenario.ProcedureSupersedes,
+				),
+			)
+		}
 		for _, failure := range scenario.TopFailureMessages {
 			lines = append(lines, "  - "+failure)
 		}
@@ -294,6 +337,9 @@ func isDurableMemoryAssertion(kind string) bool {
 		AssertDurableCardConfidenceRange,
 		AssertDurableCardScope,
 		AssertDurableCardSupersedes,
+		AssertDurableCardVersionEquals,
+		AssertDurableCardVersionAtLeast,
+		AssertDurableCardActivationRange,
 		AssertEdgeExists:
 		return true
 	default:

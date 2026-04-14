@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -103,12 +104,13 @@ func (r *Runner) runTaskPlan(task airuntime.Task, onProgress func(ProgressEvent)
 	emitProgress(onProgress, "planning.generate", "Generating the task plan...")
 	now := time.Now().UTC()
 	body, modelResp, modelErr := r.generateTaskPlan(task, now)
+	body = attachProcedureHintsToPlan(body, task.Metadata)
 	emitProgress(onProgress, "planning.persist", "Writing the plan artifact and observation...")
 	artifactPath, err := r.writeArtifact("reports", task.TaskID+"-plan.md", body)
 	if err != nil {
 		return RunResult{}, err
 	}
-	obsPath, err := r.writeObservation("os", task.TaskID+"-plan.json", map[string]any{
+	payload := map[string]any{
 		"type":           "task-plan",
 		"task_id":        task.TaskID,
 		"selected_skill": firstNonEmpty(task.SelectedSkill, "task-plan"),
@@ -117,7 +119,16 @@ func (r *Runner) runTaskPlan(task airuntime.Task, onProgress func(ProgressEvent)
 		"model_provider": modelResp.Provider,
 		"model_name":     modelResp.Model,
 		"model_error":    errorString(modelErr),
-	})
+		"artifact_path":  artifactPath,
+	}
+	if hints := procedureHintsFromMetadata(task.Metadata); hints.hasEvidence() {
+		payload["procedure_task_class"] = firstNonEmpty(strings.TrimSpace(task.Metadata["procedure_task_class"]), strings.TrimSpace(task.Metadata["task_class"]))
+		payload["procedure_steps"] = hints.Steps
+		payload["procedure_guardrails"] = hints.Guardrails
+		payload["procedure_summary"] = hints.Summary
+		payload["procedure_success_signal"] = hints.SuccessSignal
+	}
+	obsPath, err := r.writeObservation("os", task.TaskID+"-plan.json", payload)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -126,6 +137,7 @@ func (r *Runner) runTaskPlan(task airuntime.Task, onProgress func(ProgressEvent)
 		ensureMetadata(t)
 		t.NextAction = "plan generated"
 		t.Metadata["plan_artifact"] = artifactPath
+		t.Metadata["plan_observation"] = obsPath
 	})
 	if err != nil {
 		return RunResult{}, err
@@ -301,6 +313,9 @@ func (r *Runner) runShellCommand(task airuntime.Task, onProgress func(ProgressEv
 	}
 	args := splitArgs(task.Metadata["args"])
 	workdir := task.Metadata["workdir"]
+	timeoutMS := parseInt(task.Metadata["timeout_ms"], 0)
+	maxAttempts := parseInt(task.Metadata["max_attempts"], 0)
+	idempotencyKey := strings.TrimSpace(task.Metadata["idempotency_key"])
 	approvalToken, approvalResult, err := r.resolveRootApproval(task, execution.ActionKindShell, fmt.Sprintf("root shell command %s", command), map[string]string{
 		"command": command,
 		"args":    task.Metadata["args"],
@@ -320,6 +335,9 @@ func (r *Runner) runShellCommand(task airuntime.Task, onProgress func(ProgressEv
 		Command:          command,
 		Args:             args,
 		Workdir:          workdir,
+		TimeoutMS:        timeoutMS,
+		MaxAttempts:      maxAttempts,
+		IdempotencyKey:   idempotencyKey,
 		ExecutionProfile: task.ExecutionProfile,
 		ApprovalToken:    approvalToken,
 		Metadata: map[string]string{
@@ -343,6 +361,9 @@ func (r *Runner) runShellCommand(task airuntime.Task, onProgress func(ProgressEv
 		"args":          args,
 		"workdir":       workdir,
 		"status":        action.Status,
+		"attempts":      len(action.AttemptHistory),
+		"retryable":     action.Retryable,
+		"failure_type":  action.FailureCategory,
 		"artifact_path": artifactPath,
 	})
 	if err != nil {
@@ -573,12 +594,13 @@ func (r *Runner) runMemoryConsolidate(task airuntime.Task, onProgress func(Progr
 	now := time.Now().UTC()
 	body, modelResp, modelErr := r.generateMemorySummary(task, now)
 	body = fmt.Sprintf("%s\nPromoted candidates: %d\nExamined candidates: %d\n", body, consolidationResult.Promoted, consolidationResult.Examined)
+	body = attachProcedureHintsToPlan(body, task.Metadata)
 	emitProgress(onProgress, "persist.artifacts", "Writing the memory artifact and observation...")
 	artifactPath, err := r.writeArtifact("reports", task.TaskID+"-memory.md", body)
 	if err != nil {
 		return RunResult{}, err
 	}
-	obsPath, err := r.writeObservation("os", task.TaskID+"-memory.json", map[string]any{
+	payload := map[string]any{
 		"type":           "memory-consolidate",
 		"task_id":        task.TaskID,
 		"generated_at":   now.Format(time.RFC3339),
@@ -589,7 +611,15 @@ func (r *Runner) runMemoryConsolidate(task airuntime.Task, onProgress func(Progr
 		"promoted":       consolidationResult.Promoted,
 		"promoted_cards": consolidationResult.PromotedCards,
 		"artifact_path":  artifactPath,
-	})
+	}
+	if hints := procedureHintsFromMetadata(task.Metadata); hints.hasEvidence() {
+		payload["procedure_task_class"] = firstNonEmpty(strings.TrimSpace(task.Metadata["procedure_task_class"]), strings.TrimSpace(task.Metadata["task_class"]))
+		payload["procedure_steps"] = hints.Steps
+		payload["procedure_guardrails"] = hints.Guardrails
+		payload["procedure_summary"] = hints.Summary
+		payload["procedure_success_signal"] = hints.SuccessSignal
+	}
+	obsPath, err := r.writeObservation("os", task.TaskID+"-memory.json", payload)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -597,6 +627,7 @@ func (r *Runner) runMemoryConsolidate(task airuntime.Task, onProgress func(Progr
 		ensureMetadata(t)
 		t.NextAction = "memory consolidation recorded"
 		t.Metadata["memory_artifact"] = artifactPath
+		t.Metadata["memory_observation"] = obsPath
 	})
 	if err != nil {
 		return RunResult{}, err
@@ -614,11 +645,12 @@ func (r *Runner) extractProcedureCandidates(task airuntime.Task) error {
 	}
 	minRuns := parseInt(task.Metadata["min_runs"], 2)
 	candidates, _ := memory.BuildProcedureCandidates(memory.ProcedureExtractionRequest{
-		Tasks:         tasks,
-		TaskClass:     strings.TrimSpace(task.Metadata["task_class"]),
-		SelectedSkill: strings.TrimSpace(task.Metadata["selected_skill"]),
-		Scope:         firstNonEmpty(strings.TrimSpace(task.Metadata["scope"]), memoryScopeProject),
-		MinRuns:       minRuns,
+		Tasks:            tasks,
+		TaskClass:        strings.TrimSpace(task.Metadata["task_class"]),
+		SelectedSkill:    strings.TrimSpace(task.Metadata["selected_skill"]),
+		Scope:            firstNonEmpty(strings.TrimSpace(task.Metadata["scope"]), memoryScopeProject),
+		MinRuns:          minRuns,
+		EvidenceResolver: r.procedureEvidenceForTask,
 	})
 	for _, candidate := range candidates {
 		if _, err := r.memoryStore.CreateCard(candidate); err != nil && !errors.Is(err, memory.ErrAlreadyExists) {
@@ -626,6 +658,194 @@ func (r *Runner) extractProcedureCandidates(task airuntime.Task) error {
 		}
 	}
 	return nil
+}
+
+type procedureHints struct {
+	Steps         string
+	Guardrails    string
+	Summary       string
+	SuccessSignal string
+}
+
+func procedureHintsFromMetadata(metadata map[string]string) procedureHints {
+	return procedureHints{
+		Steps:         strings.TrimSpace(metadata["procedure_steps"]),
+		Guardrails:    strings.TrimSpace(metadata["procedure_guardrails"]),
+		Summary:       strings.TrimSpace(metadata["procedure_summary"]),
+		SuccessSignal: strings.TrimSpace(metadata["procedure_success_signal"]),
+	}
+}
+
+func (h procedureHints) hasEvidence() bool {
+	return strings.TrimSpace(h.Steps) != ""
+}
+
+func attachProcedureHintsToPlan(body string, metadata map[string]string) string {
+	hints := procedureHintsFromMetadata(metadata)
+	if !hints.hasEvidence() {
+		return body
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(body, "\n"))
+	b.WriteString("\n\n## Procedure Candidate\n\n")
+	if strings.TrimSpace(hints.Summary) != "" {
+		fmt.Fprintf(&b, "Summary: %s\n\n", hints.Summary)
+	}
+	b.WriteString("Steps:\n")
+	for _, line := range strings.Split(hints.Steps, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "- %s\n", line)
+	}
+	if strings.TrimSpace(hints.Guardrails) != "" {
+		b.WriteString("\nGuardrails:\n")
+		for _, line := range strings.Split(hints.Guardrails, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "- %s\n", line)
+		}
+	}
+	if strings.TrimSpace(hints.SuccessSignal) != "" {
+		fmt.Fprintf(&b, "\nSuccess signal: %s\n", hints.SuccessSignal)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (r *Runner) procedureEvidenceForTask(task airuntime.Task) memory.ProcedureEvidence {
+	for _, key := range metadataKeysBySuffix(task.Metadata, "_observation") {
+		if evidence := readProcedureEvidenceObservation(strings.TrimSpace(task.Metadata[key])); strings.TrimSpace(evidence.Steps) != "" {
+			return evidence
+		}
+	}
+	for _, key := range metadataKeysBySuffix(task.Metadata, "_artifact") {
+		if evidence := readProcedureEvidenceArtifact(strings.TrimSpace(task.Metadata[key])); strings.TrimSpace(evidence.Steps) != "" {
+			return evidence
+		}
+	}
+	hints := procedureHintsFromMetadata(task.Metadata)
+	return memory.ProcedureEvidence{
+		Steps:           hints.Steps,
+		Guardrails:      hints.Guardrails,
+		Summary:         hints.Summary,
+		SuccessSignal:   hints.SuccessSignal,
+		ArtifactPath:    firstMetadataValue(task.Metadata, "_artifact"),
+		ObservationPath: firstMetadataValue(task.Metadata, "_observation"),
+	}
+}
+
+func metadataKeysBySuffix(metadata map[string]string, suffix string) []string {
+	keys := make([]string, 0)
+	for key, value := range metadata {
+		if strings.HasSuffix(key, suffix) && strings.TrimSpace(value) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func firstMetadataValue(metadata map[string]string, suffix string) string {
+	keys := metadataKeysBySuffix(metadata, suffix)
+	if len(keys) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(metadata[keys[0]])
+}
+
+func readProcedureEvidenceObservation(path string) memory.ProcedureEvidence {
+	if strings.TrimSpace(path) == "" {
+		return memory.ProcedureEvidence{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return memory.ProcedureEvidence{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return memory.ProcedureEvidence{}
+	}
+	evidence := memory.ProcedureEvidence{
+		Steps:           strings.TrimSpace(stringValue(payload["procedure_steps"])),
+		Guardrails:      strings.TrimSpace(stringValue(payload["procedure_guardrails"])),
+		Summary:         strings.TrimSpace(stringValue(payload["procedure_summary"])),
+		SuccessSignal:   strings.TrimSpace(stringValue(payload["procedure_success_signal"])),
+		ArtifactPath:    strings.TrimSpace(stringValue(payload["artifact_path"])),
+		ObservationPath: path,
+	}
+	if strings.TrimSpace(evidence.Summary) == "" {
+		evidence.Summary = strings.TrimSpace(stringValue(payload["summary"]))
+	}
+	return evidence
+}
+
+func readProcedureEvidenceArtifact(path string) memory.ProcedureEvidence {
+	if strings.TrimSpace(path) == "" {
+		return memory.ProcedureEvidence{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return memory.ProcedureEvidence{}
+	}
+	text := string(data)
+	steps := markdownSectionBullets(text, "Steps:")
+	if strings.TrimSpace(steps) == "" {
+		return memory.ProcedureEvidence{}
+	}
+	return memory.ProcedureEvidence{
+		Steps:         steps,
+		Guardrails:    markdownSectionBullets(text, "Guardrails:"),
+		Summary:       markdownInlinePrefix(text, "Summary:"),
+		SuccessSignal: markdownInlinePrefix(text, "Success signal:"),
+		ArtifactPath:  path,
+	}
+}
+
+func markdownInlinePrefix(text, prefix string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+func markdownSectionBullets(text, header string) string {
+	lines := strings.Split(text, "\n")
+	inSection := false
+	var collected []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == header:
+			inSection = true
+			continue
+		case !inSection:
+			continue
+		case trimmed == "":
+			if len(collected) > 0 {
+				break
+			}
+			continue
+		case strings.HasPrefix(trimmed, "## "):
+			return strings.Join(collected, "\n")
+		case strings.HasPrefix(trimmed, "- "):
+			collected = append(collected, strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")))
+		}
+	}
+	return strings.Join(collected, "\n")
+}
+
+func stringValue(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 func (r *Runner) blockTask(task airuntime.Task, reason string) (RunResult, error) {
@@ -1738,7 +1958,47 @@ func splitArgs(raw string) []string {
 	if raw == "" {
 		return nil
 	}
-	return strings.Fields(raw)
+	args := make([]string, 0)
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		args = append(args, current.String())
+		current.Reset()
+	}
+	for _, r := range raw {
+		switch {
+		case escaped:
+			if r == '\\' || r == '"' || r == '\'' || r == ' ' || r == '\t' || r == '\n' {
+				current.WriteRune(r)
+			} else {
+				current.WriteRune('\\')
+				current.WriteRune(r)
+			}
+			escaped = false
+		case r == '\\' && quote == '\'':
+			current.WriteRune(r)
+		case r == '\\':
+			escaped = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				continue
+			}
+			current.WriteRune(r)
+		case r == '\'' || r == '"':
+			quote = r
+		case r == ' ' || r == '\t' || r == '\n':
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return args
 }
 
 func (r *Runner) generateTaskPlan(task airuntime.Task, now time.Time) (string, model.TextResponse, error) {

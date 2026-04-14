@@ -36,11 +36,16 @@ const (
 	AssertDurableCardConfidenceRange     = "durable_card_confidence_range"
 	AssertDurableCardScope               = "durable_card_scope"
 	AssertDurableCardSupersedes          = "durable_card_supersedes"
+	AssertDurableCardVersionEquals       = "durable_card_version_equals"
+	AssertDurableCardVersionAtLeast      = "durable_card_version_at_least"
+	AssertDurableCardActivationRange     = "durable_card_activation_score_range"
 	AssertEdgeExists                     = "edge_exists"
 	AssertRecallNotContains              = "recall_not_contains"
 	AssertProcedureCount                 = "procedure_count"
 	AssertProcedureContains              = "procedure_contains"
 	AssertProcedureStepContains          = "procedure_step_contains"
+	AssertActionAttemptCount             = "action_attempt_count"
+	AssertRetrySucceeded                 = "retry_succeeded"
 )
 
 type Scenario struct {
@@ -112,21 +117,33 @@ type RunReport struct {
 }
 
 type StepReport struct {
-	ID               string         `json:"id"`
-	Type             string         `json:"type"`
-	SessionID        string         `json:"session_id,omitempty"`
-	TaskID           string         `json:"task_id,omitempty"`
-	TaskState        string         `json:"task_state,omitempty"`
-	SelectedSkill    string         `json:"selected_skill,omitempty"`
-	ApprovalID       string         `json:"approval_id,omitempty"`
-	UserContent      string         `json:"user_content,omitempty"`
-	AssistantContent string         `json:"assistant_content,omitempty"`
-	ArtifactPaths    []string       `json:"artifact_paths,omitempty"`
-	ObservationPaths []string       `json:"observation_paths,omitempty"`
-	Progress         []StepProgress `json:"progress,omitempty"`
-	StartedAt        time.Time      `json:"started_at"`
-	FinishedAt       time.Time      `json:"finished_at"`
-	Error            string         `json:"error,omitempty"`
+	ID                       string         `json:"id"`
+	Type                     string         `json:"type"`
+	SessionID                string         `json:"session_id,omitempty"`
+	TaskID                   string         `json:"task_id,omitempty"`
+	TaskState                string         `json:"task_state,omitempty"`
+	SelectedSkill            string         `json:"selected_skill,omitempty"`
+	ActionID                 string         `json:"action_id,omitempty"`
+	ActionStatus             string         `json:"action_status,omitempty"`
+	ActionFailureCategory    string         `json:"action_failure_category,omitempty"`
+	ActionAttempts           int            `json:"action_attempts,omitempty"`
+	RetryAttempts            int            `json:"retry_attempts,omitempty"`
+	RetrySucceeded           bool           `json:"retry_succeeded,omitempty"`
+	CardType                 string         `json:"card_type,omitempty"`
+	ApprovalID               string         `json:"approval_id,omitempty"`
+	UserContent              string         `json:"user_content,omitempty"`
+	AssistantContent         string         `json:"assistant_content,omitempty"`
+	ArtifactPaths            []string       `json:"artifact_paths,omitempty"`
+	ObservationPaths         []string       `json:"observation_paths,omitempty"`
+	PromotedCount            int            `json:"promoted_count,omitempty"`
+	SupersededCount          int            `json:"superseded_count,omitempty"`
+	ArchivedCount            int            `json:"archived_count,omitempty"`
+	MemoryFeedbackUpdates    int            `json:"memory_feedback_updates,omitempty"`
+	ProcedureFeedbackUpdates int            `json:"procedure_feedback_updates,omitempty"`
+	Progress                 []StepProgress `json:"progress,omitempty"`
+	StartedAt                time.Time      `json:"started_at"`
+	FinishedAt               time.Time      `json:"finished_at"`
+	Error                    string         `json:"error,omitempty"`
 }
 
 type StepProgress struct {

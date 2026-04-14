@@ -9,6 +9,7 @@ The goal is not UI demo coverage. The goal is engineering coverage:
 - structured assertions
 - regression comparison
 - execution trace capture
+- procedure promotion/supersession rollup
 
 ## Phase 1 Scope
 
@@ -28,6 +29,11 @@ Phase 1 focuses on a compact industrial baseline:
 12. `memory_contamination_recovery`
 13. `procedural_promotion`
 14. `procedural_extraction_repeated_runs`
+15. `procedural_extraction_memory_consolidate`
+16. `procedural_supersession_lifecycle`
+17. `memory_usefulness_feedback`
+18. `memory_feedback_noop_direct_reply`
+19. `retryable_timeout_shell`
 
 Each scenario runs inside an isolated runtime root and produces a run report.
 
@@ -139,7 +145,7 @@ Use this to validate:
 - candidate-to-active promotion
 - recall visibility after consolidation
 - bounded memory promotion by type or scope
-- procedure extraction from repeated successful task runs
+- procedure extraction from repeated successful task evidence discovered through `*_observation` / `*_artifact` metadata paths, with task metadata only as fallback
 
 ### `seed_memory_card`
 
@@ -154,6 +160,8 @@ Supported fields:
 - `metadata.supersedes` (optional)
 - `metadata.source` (optional)
 - `metadata.confidence` (optional)
+- `metadata.activation_score` (optional)
+- `metadata.activation_decay_policy` (optional)
 - `metadata.content.<field>` for content payload fields
 
 Use this to validate:
@@ -369,6 +377,37 @@ Fields:
 - `contains` (optional content filter)
 - `equals` (expected superseded card id)
 
+### `durable_card_version_equals`
+
+Assert a matching durable card remains at an exact version.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains` (optional content filter)
+- `expected`
+
+### `durable_card_version_at_least`
+
+Assert a matching durable card has been revised at least N times.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains` (optional content filter)
+- `min`
+
+### `durable_card_activation_score_range`
+
+Assert a matching durable card has activation score inside a bounded range.
+
+Fields:
+
+- `field` (`card_type`)
+- `contains` (optional content filter)
+- `min_confidence`
+- `max_confidence`
+
 ### `procedure_count`
 
 Assert the active durable procedure store contains at least N procedures.
@@ -392,6 +431,24 @@ Assert an active procedure includes a matching step, guardrail, or summary fragm
 Fields:
 
 - `contains`
+
+### `action_attempt_count`
+
+Assert a step action executed with the expected number of attempts.
+
+Fields:
+
+- `step`
+- `expected` or `min`
+
+### `retry_succeeded`
+
+Assert whether a step only succeeded after one or more retries.
+
+Fields:
+
+- `step`
+- `equals` (`true` / `false`)
 
 ### `recall_contains`
 

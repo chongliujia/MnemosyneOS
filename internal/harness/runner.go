@@ -285,6 +285,19 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 		report.SelectedSkill = result.Task.SelectedSkill
 		report.ArtifactPaths = append(report.ArtifactPaths, result.ArtifactPaths...)
 		report.ObservationPaths = append(report.ObservationPaths, result.ObservationPaths...)
+		if result.Action != nil {
+			report.ActionID = result.Action.ActionID
+			report.ActionStatus = result.Action.Status
+			report.ActionFailureCategory = result.Action.FailureCategory
+			report.ActionAttempts = len(result.Action.AttemptHistory)
+			if report.ActionAttempts == 0 && result.Action.Attempt > 0 {
+				report.ActionAttempts = result.Action.Attempt
+			}
+			if report.ActionAttempts > 1 {
+				report.RetryAttempts = report.ActionAttempts - 1
+			}
+			report.RetrySucceeded = result.Action.Status == execution.ActionStatusCompleted && report.RetryAttempts > 0
+		}
 		e.lastTaskID = result.Task.TaskID
 		if approvalID := strings.TrimSpace(result.Task.Metadata["root_approval_id"]); approvalID != "" {
 			report.ApprovalID = approvalID
@@ -323,6 +336,7 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 		return nil
 
 	case StepTypeSendChat:
+		beforeCards := latestCardsByID(e.memoryStore)
 		resp, err := e.chatService.Send(chat.SendRequest{
 			SessionID:        firstNonEmpty(step.SessionID, "default"),
 			Message:          step.Message,
@@ -351,6 +365,7 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 				}
 			}
 		}
+		report.MemoryFeedbackUpdates, report.ProcedureFeedbackUpdates = feedbackUpdateCounts(beforeCards, latestCardsByID(e.memoryStore))
 		return nil
 
 	case StepTypeRestartRuntime:
@@ -391,6 +406,10 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 		if err != nil {
 			return err
 		}
+		report.CardType = req.CardType
+		report.PromotedCount = result.Promoted
+		report.SupersededCount = result.Superseded
+		report.ArchivedCount = result.Archived
 		report.ObservationPaths = append(report.ObservationPaths, fmt.Sprintf("examined=%d promoted=%d", result.Examined, result.Promoted))
 		return nil
 
@@ -431,6 +450,19 @@ func seedCardRequestFromMetadata(metadata map[string]string) (memory.CreateCardR
 			AgentID: "harness",
 			Source:  firstNonEmpty(strings.TrimSpace(metadata["source"]), "harness"),
 		},
+	}
+	if raw := strings.TrimSpace(metadata["activation_score"]); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return memory.CreateCardRequest{}, fmt.Errorf("invalid activation_score %q: %w", raw, err)
+		}
+		req.Activation = &memory.ActivationState{Score: value}
+	}
+	if raw := strings.TrimSpace(metadata["activation_decay_policy"]); raw != "" {
+		if req.Activation == nil {
+			req.Activation = &memory.ActivationState{Score: 1.0}
+		}
+		req.Activation.DecayPolicy = raw
 	}
 	if raw := strings.TrimSpace(metadata["confidence"]); raw != "" {
 		value, err := strconv.ParseFloat(raw, 64)
@@ -474,11 +506,12 @@ func (e *runtimeEnv) extractProcedureCandidates(metadata map[string]string) erro
 		return err
 	}
 	candidates, _ := memory.BuildProcedureCandidates(memory.ProcedureExtractionRequest{
-		Tasks:         tasks,
-		TaskClass:     strings.TrimSpace(metadata["task_class"]),
-		SelectedSkill: strings.TrimSpace(metadata["selected_skill"]),
-		Scope:         firstNonEmpty(strings.TrimSpace(metadata["scope"]), memory.ScopeProject),
-		MinRuns:       parseInt(metadata["min_runs"], 2),
+		Tasks:            tasks,
+		TaskClass:        strings.TrimSpace(metadata["task_class"]),
+		SelectedSkill:    strings.TrimSpace(metadata["selected_skill"]),
+		Scope:            firstNonEmpty(strings.TrimSpace(metadata["scope"]), memory.ScopeProject),
+		MinRuns:          parseInt(metadata["min_runs"], 2),
+		EvidenceResolver: harnessProcedureEvidenceForTask,
 	})
 	for _, candidate := range candidates {
 		if _, err := e.memoryStore.CreateCard(candidate); err != nil && !errors.Is(err, memory.ErrAlreadyExists) {
@@ -486,6 +519,133 @@ func (e *runtimeEnv) extractProcedureCandidates(metadata map[string]string) erro
 		}
 	}
 	return nil
+}
+
+func harnessProcedureEvidenceForTask(task airuntime.Task) memory.ProcedureEvidence {
+	for _, key := range harnessMetadataKeysBySuffix(task.Metadata, "_observation") {
+		if evidence := harnessReadProcedureObservation(strings.TrimSpace(task.Metadata[key])); strings.TrimSpace(evidence.Steps) != "" {
+			return evidence
+		}
+	}
+	for _, key := range harnessMetadataKeysBySuffix(task.Metadata, "_artifact") {
+		if evidence := harnessReadProcedureArtifact(strings.TrimSpace(task.Metadata[key])); strings.TrimSpace(evidence.Steps) != "" {
+			return evidence
+		}
+	}
+	return memory.ProcedureEvidence{
+		Steps:           strings.TrimSpace(task.Metadata["procedure_steps"]),
+		Guardrails:      strings.TrimSpace(task.Metadata["procedure_guardrails"]),
+		Summary:         strings.TrimSpace(task.Metadata["procedure_summary"]),
+		SuccessSignal:   strings.TrimSpace(task.Metadata["procedure_success_signal"]),
+		ArtifactPath:    harnessFirstMetadataValue(task.Metadata, "_artifact"),
+		ObservationPath: harnessFirstMetadataValue(task.Metadata, "_observation"),
+	}
+}
+
+func harnessMetadataKeysBySuffix(metadata map[string]string, suffix string) []string {
+	keys := make([]string, 0)
+	for key, value := range metadata {
+		if strings.HasSuffix(key, suffix) && strings.TrimSpace(value) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func harnessFirstMetadataValue(metadata map[string]string, suffix string) string {
+	keys := harnessMetadataKeysBySuffix(metadata, suffix)
+	if len(keys) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(metadata[keys[0]])
+}
+
+func harnessReadProcedureObservation(path string) memory.ProcedureEvidence {
+	if strings.TrimSpace(path) == "" {
+		return memory.ProcedureEvidence{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return memory.ProcedureEvidence{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return memory.ProcedureEvidence{}
+	}
+	return memory.ProcedureEvidence{
+		Steps:           strings.TrimSpace(harnessStringValue(payload["procedure_steps"])),
+		Guardrails:      strings.TrimSpace(harnessStringValue(payload["procedure_guardrails"])),
+		Summary:         strings.TrimSpace(harnessStringValue(payload["procedure_summary"])),
+		SuccessSignal:   strings.TrimSpace(harnessStringValue(payload["procedure_success_signal"])),
+		ArtifactPath:    strings.TrimSpace(harnessStringValue(payload["artifact_path"])),
+		ObservationPath: path,
+	}
+}
+
+func harnessReadProcedureArtifact(path string) memory.ProcedureEvidence {
+	if strings.TrimSpace(path) == "" {
+		return memory.ProcedureEvidence{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return memory.ProcedureEvidence{}
+	}
+	text := string(data)
+	steps := harnessMarkdownSectionBullets(text, "Steps:")
+	if strings.TrimSpace(steps) == "" {
+		return memory.ProcedureEvidence{}
+	}
+	return memory.ProcedureEvidence{
+		Steps:         steps,
+		Guardrails:    harnessMarkdownSectionBullets(text, "Guardrails:"),
+		Summary:       harnessMarkdownInlinePrefix(text, "Summary:"),
+		SuccessSignal: harnessMarkdownInlinePrefix(text, "Success signal:"),
+		ArtifactPath:  path,
+	}
+}
+
+func harnessMarkdownInlinePrefix(text, prefix string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+func harnessMarkdownSectionBullets(text, header string) string {
+	lines := strings.Split(text, "\n")
+	inSection := false
+	var collected []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == header:
+			inSection = true
+			continue
+		case !inSection:
+			continue
+		case trimmed == "":
+			if len(collected) > 0 {
+				return strings.Join(collected, "\n")
+			}
+			continue
+		case strings.HasPrefix(trimmed, "## "):
+			return strings.Join(collected, "\n")
+		case strings.HasPrefix(trimmed, "- "):
+			collected = append(collected, strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")))
+		}
+	}
+	return strings.Join(collected, "\n")
+}
+
+func harnessStringValue(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 func (e *runtimeEnv) evaluateAssertions(assertions []Assertion) ([]AssertionResult, bool) {
@@ -763,6 +923,46 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 		}
 		return failAssertion(assertion, fmt.Sprintf("durable card %s supersedes=%q expected=%q", card.CardID, card.Supersedes, expected))
 
+	case AssertDurableCardVersionEquals:
+		card, ok := findMatchingCard(
+			e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)}).Cards,
+			assertion.Contains,
+		)
+		if !ok {
+			return failAssertion(assertion, fmt.Sprintf("no durable card type=%s matched contains=%q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+		}
+		if card.Version == assertion.Expected {
+			return passAssertion(assertion, fmt.Sprintf("durable card %s version=%d", card.CardID, card.Version))
+		}
+		return failAssertion(assertion, fmt.Sprintf("durable card %s version=%d expected=%d", card.CardID, card.Version, assertion.Expected))
+
+	case AssertDurableCardVersionAtLeast:
+		card, ok := findMatchingCard(
+			e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)}).Cards,
+			assertion.Contains,
+		)
+		if !ok {
+			return failAssertion(assertion, fmt.Sprintf("no durable card type=%s matched contains=%q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+		}
+		if card.Version >= assertion.Min {
+			return passAssertion(assertion, fmt.Sprintf("durable card %s version=%d min=%d", card.CardID, card.Version, assertion.Min))
+		}
+		return failAssertion(assertion, fmt.Sprintf("durable card %s version=%d min=%d", card.CardID, card.Version, assertion.Min))
+
+	case AssertDurableCardActivationRange:
+		card, ok := findMatchingCard(
+			e.memoryStore.Query(memory.QueryRequest{CardType: strings.TrimSpace(assertion.Field)}).Cards,
+			assertion.Contains,
+		)
+		if !ok {
+			return failAssertion(assertion, fmt.Sprintf("no durable card type=%s matched contains=%q", firstNonEmpty(assertion.Field, "all"), assertion.Contains))
+		}
+		actual := card.Activation.Score
+		if confidenceInRange(actual, assertion.MinConfidence, assertion.MaxConfidence) {
+			return passAssertion(assertion, fmt.Sprintf("durable card %s activation_score=%.3f within [%.3f, %.3f]", card.CardID, actual, assertion.MinConfidence, assertion.MaxConfidence))
+		}
+		return failAssertion(assertion, fmt.Sprintf("durable card %s activation_score=%.3f outside [%.3f, %.3f]", card.CardID, actual, assertion.MinConfidence, assertion.MaxConfidence))
+
 	case AssertEdgeCount:
 		resp := e.memoryStore.Query(memory.QueryRequest{})
 		count := 0
@@ -865,6 +1065,24 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 			}
 		}
 		return failAssertion(assertion, fmt.Sprintf("no active procedure step contained %q", assertion.Contains))
+
+	case AssertActionAttemptCount:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		return evaluateCountAssertion(assertion, step.ActionAttempts, fmt.Sprintf("step %s action attempts", assertion.Step))
+
+	case AssertRetrySucceeded:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		expected := parseBool(assertion.Equals)
+		if step.RetrySucceeded == expected {
+			return passAssertion(assertion, fmt.Sprintf("step %s retry_succeeded=%t", assertion.Step, step.RetrySucceeded))
+		}
+		return failAssertion(assertion, fmt.Sprintf("step %s retry_succeeded=%t expected=%t", assertion.Step, step.RetrySucceeded, expected))
 
 	default:
 		return failAssertion(assertion, fmt.Sprintf("unsupported assertion type %q", assertion.Type))
@@ -996,6 +1214,37 @@ func findMatchingCard(cards []memory.Card, contains string) (memory.Card, bool) 
 	return memory.Card{}, false
 }
 
+func latestCardsByID(store *memory.Store) map[string]memory.Card {
+	if store == nil {
+		return nil
+	}
+	cards := store.LatestCards()
+	out := make(map[string]memory.Card, len(cards))
+	for _, card := range cards {
+		out[card.CardID] = card
+	}
+	return out
+}
+
+func feedbackUpdateCounts(before, after map[string]memory.Card) (int, int) {
+	if len(after) == 0 {
+		return 0, 0
+	}
+	memoryUpdates := 0
+	procedureUpdates := 0
+	for cardID, next := range after {
+		prev, ok := before[cardID]
+		if !ok || next.Version <= prev.Version {
+			continue
+		}
+		memoryUpdates++
+		if next.CardType == "procedure" {
+			procedureUpdates++
+		}
+	}
+	return memoryUpdates, procedureUpdates
+}
+
 func confidenceInRange(actual, minValue, maxValue float64) bool {
 	if minValue != 0 && actual < minValue {
 		return false
@@ -1073,6 +1322,12 @@ func assertionDescription(assertion Assertion) string {
 		return fmt.Sprintf("durable card type %s has scope %q", firstNonEmpty(assertion.Field, "all"), assertion.Equals)
 	case AssertDurableCardSupersedes:
 		return fmt.Sprintf("durable card type %s supersedes %q", firstNonEmpty(assertion.Field, "all"), assertion.Equals)
+	case AssertDurableCardVersionEquals:
+		return fmt.Sprintf("durable card type %s version equals %d", firstNonEmpty(assertion.Field, "all"), assertion.Expected)
+	case AssertDurableCardVersionAtLeast:
+		return fmt.Sprintf("durable card type %s version is at least %d", firstNonEmpty(assertion.Field, "all"), assertion.Min)
+	case AssertDurableCardActivationRange:
+		return fmt.Sprintf("durable card type %s activation score is within [%.3f, %.3f]", firstNonEmpty(assertion.Field, "all"), assertion.MinConfidence, assertion.MaxConfidence)
 	case AssertEdgeCount:
 		return fmt.Sprintf("edge count for type %s", firstNonEmpty(assertion.Field, "all"))
 	case AssertEdgeExists:
@@ -1081,6 +1336,10 @@ func assertionDescription(assertion Assertion) string {
 		return fmt.Sprintf("recall query %q source %s contains %q", assertion.Query, firstNonEmpty(assertion.Source, "all"), assertion.Contains)
 	case AssertRecallNotContains:
 		return fmt.Sprintf("recall query %q source %s does not contain %q", assertion.Query, firstNonEmpty(assertion.Source, "all"), assertion.Contains)
+	case AssertActionAttemptCount:
+		return fmt.Sprintf("action attempt count for %s", assertion.Step)
+	case AssertRetrySucceeded:
+		return fmt.Sprintf("retry succeeded for %s equals %q", assertion.Step, assertion.Equals)
 	default:
 		return assertion.Type
 	}

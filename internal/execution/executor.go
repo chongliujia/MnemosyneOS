@@ -131,7 +131,7 @@ func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
 			}
 			return record, nil
 		}
-		if !result.retryable || attempt >= maxAttempts {
+		if !shouldRetry(ActionKindShell, result.failureCategory, attempt, maxAttempts) {
 			record.Status = ActionStatusFailed
 			if err := e.store.Move(record, ActionStatusFailed); err != nil {
 				return ActionRecord{}, err
@@ -416,6 +416,18 @@ func normalizeMaxAttempts(explicit, attempt int) int {
 		return 1
 	}
 	return attempt
+}
+
+func shouldRetry(actionKind, failureCategory string, attempt, maxAttempts int) bool {
+	if attempt >= maxAttempts {
+		return false
+	}
+	switch actionKind {
+	case ActionKindShell:
+		return failureCategory == ActionFailureTimeout
+	default:
+		return false
+	}
 }
 
 func (e *Executor) runShellAttempt(commandPath string, args []string, workdir string, timeout time.Duration) shellAttemptResult {

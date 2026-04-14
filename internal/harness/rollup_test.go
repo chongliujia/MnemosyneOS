@@ -21,6 +21,11 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 		FinishedAt:       time.Now().UTC().Add(10 * time.Millisecond),
 		Passed:           true,
 		AssertionResults: []AssertionResult{{Type: AssertDurableCardCount, Passed: true}, {Type: AssertProcedureCount, Passed: true}},
+		StepReports: []StepReport{
+			{Type: StepTypeConsolidate, CardType: "procedure", PromotedCount: 2, SupersededCount: 1},
+			{Type: StepTypeSendChat, MemoryFeedbackUpdates: 3, ProcedureFeedbackUpdates: 1},
+			{Type: StepTypeRunTask, RetryAttempts: 1, RetrySucceeded: true},
+		},
 	}
 	reportB := RunReport{
 		ScenarioName:     "email_inbox_summary",
@@ -62,6 +67,15 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 	if rollup.ScenarioResults[0].DurableAssertions != 1 || rollup.ScenarioResults[0].ProcedureAssertions != 1 || rollup.ScenarioResults[0].RecallAssertions != 1 || rollup.ScenarioResults[0].MemoryFailures != 1 {
 		t.Fatalf("expected memory assertion counters to be tracked, got %+v", rollup.ScenarioResults[0])
 	}
+	if rollup.ScenarioResults[0].ProcedurePromotions != 2 || rollup.ScenarioResults[0].ProcedureSupersedes != 1 {
+		t.Fatalf("expected procedure rollup counters to be tracked, got %+v", rollup.ScenarioResults[0])
+	}
+	if rollup.ScenarioResults[0].MemoryFeedbackUpdates != 3 || rollup.ScenarioResults[0].ProcedureFeedbackUpdates != 1 {
+		t.Fatalf("expected memory feedback counters to be tracked, got %+v", rollup.ScenarioResults[0])
+	}
+	if rollup.ScenarioResults[0].RetryAttempts != 1 || rollup.ScenarioResults[0].RetrySuccesses != 1 {
+		t.Fatalf("expected retry counters to be tracked, got %+v", rollup.ScenarioResults[0])
+	}
 }
 
 func TestBuildRollupWithTagsFiltersReports(t *testing.T) {
@@ -88,6 +102,44 @@ func TestBuildRollupWithTagsFiltersReports(t *testing.T) {
 	}
 	if rollup.RunCount != 1 || len(rollup.ScenarioResults) != 1 || rollup.ScenarioResults[0].ScenarioName != "chat_followup_continuity" {
 		t.Fatalf("unexpected filtered rollup: %+v", rollup)
+	}
+}
+
+func TestBuildRollupProcedureCountersIgnoreNonProcedureConsolidation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	report := RunReport{
+		ScenarioName: "memory_write_recall_roundtrip",
+		ScenarioLane: "regression",
+		ScenarioTags: []string{"memory"},
+		RunDir:       filepath.Join(root, "run-memory"),
+		StartedAt:    time.Now().UTC(),
+		FinishedAt:   time.Now().UTC().Add(5 * time.Millisecond),
+		Passed:       true,
+		StepReports: []StepReport{
+			{Type: StepTypeConsolidate, CardType: "search_result", PromotedCount: 3, SupersededCount: 1},
+			{Type: StepTypeConsolidate, CardType: "procedure", PromotedCount: 1, SupersededCount: 0},
+		},
+	}
+	dir := filepath.Join(root, "a")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(dir, "report.json"), report); err != nil {
+		t.Fatal(err)
+	}
+
+	rollup, err := BuildRollup(root)
+	if err != nil {
+		t.Fatalf("BuildRollup returned error: %v", err)
+	}
+	if len(rollup.ScenarioResults) != 1 {
+		t.Fatalf("expected one scenario result, got %+v", rollup.ScenarioResults)
+	}
+	stats := rollup.ScenarioResults[0]
+	if stats.ProcedurePromotions != 1 || stats.ProcedureSupersedes != 0 {
+		t.Fatalf("expected only procedure consolidation to count, got %+v", stats)
 	}
 }
 

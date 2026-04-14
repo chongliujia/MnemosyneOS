@@ -51,6 +51,244 @@ func TestRunTaskPlanCompletesTask(t *testing.T) {
 	}
 }
 
+func TestRunTaskPlanPersistsProcedureEvidence(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:         "Plan expense audit",
+		Goal:          "Create an expense audit workflow plan",
+		SelectedSkill: "task-plan",
+		Metadata: map[string]string{
+			"task_class":               "expense_audit",
+			"procedure_steps":          "extract_fields\nvalidate_policy\nflag_missing_evidence",
+			"procedure_guardrails":     "never invent invoice ids",
+			"procedure_summary":        "Audit reimbursements with explicit policy validation.",
+			"procedure_success_signal": "exceptions enumerated",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	result, err := runner.RunTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if len(result.ArtifactPaths) != 1 || len(result.ObservationPaths) != 1 {
+		t.Fatalf("expected one artifact and one observation, got artifacts=%d observations=%d", len(result.ArtifactPaths), len(result.ObservationPaths))
+	}
+	artifactData, err := os.ReadFile(result.ArtifactPaths[0])
+	if err != nil {
+		t.Fatalf("ReadFile artifact returned error: %v", err)
+	}
+	if !strings.Contains(string(artifactData), "## Procedure Candidate") || !strings.Contains(string(artifactData), "validate_policy") {
+		t.Fatalf("expected procedure hints in artifact, got %q", string(artifactData))
+	}
+	observationData, err := os.ReadFile(result.ObservationPaths[0])
+	if err != nil {
+		t.Fatalf("ReadFile observation returned error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(observationData, &payload); err != nil {
+		t.Fatalf("Unmarshal observation returned error: %v", err)
+	}
+	if payload["procedure_steps"] != "extract_fields\nvalidate_policy\nflag_missing_evidence" {
+		t.Fatalf("expected procedure steps in observation, got %+v", payload)
+	}
+	stored, err := runtimeStore.GetTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask returned error: %v", err)
+	}
+	if strings.TrimSpace(stored.Metadata["plan_observation"]) == "" {
+		t.Fatalf("expected plan_observation metadata to be set, got %+v", stored.Metadata)
+	}
+}
+
+func TestSplitArgsHonorsQuotedSegments(t *testing.T) {
+	args := splitArgs(`-c "import pathlib,time,sys;p=pathlib.Path('retryable-timeout-flag');sys.stdout.write('recovered\n') if p.exists() else (p.write_text('1'),time.sleep(0.12))"`)
+	if len(args) != 2 {
+		t.Fatalf("expected 2 args, got %#v", args)
+	}
+	if args[0] != "-c" {
+		t.Fatalf("expected first arg to be -c, got %q", args[0])
+	}
+	if !strings.Contains(args[1], "retryable-timeout-flag") || !strings.Contains(args[1], "recovered\\n") {
+		t.Fatalf("expected quoted script to stay intact, got %q", args[1])
+	}
+}
+
+func TestProcedureEvidenceForTaskScansGenericMetadataKeys(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+
+	observationPath := filepath.Join(runtimeRoot, "observations", "os", "custom-procedure.json")
+	if err := os.MkdirAll(filepath.Dir(observationPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	payload := map[string]any{
+		"procedure_steps":          "fetch_policy\nvalidate_policy\nrecord_exceptions",
+		"procedure_guardrails":     "do not skip policy validation",
+		"procedure_summary":        "Validate policy before recording exceptions.",
+		"procedure_success_signal": "exceptions recorded with policy evidence",
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent returned error: %v", err)
+	}
+	if err := os.WriteFile(observationPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	evidence := runner.procedureEvidenceForTask(airuntime.Task{
+		TaskID: "task-generic-evidence",
+		Metadata: map[string]string{
+			"expense_observation": observationPath,
+		},
+	})
+	if evidence.Steps != "fetch_policy\nvalidate_policy\nrecord_exceptions" {
+		t.Fatalf("expected generic observation steps, got %+v", evidence)
+	}
+	if evidence.ObservationPath != observationPath {
+		t.Fatalf("expected generic observation path, got %+v", evidence)
+	}
+}
+
+func TestProcedureEvidenceForTaskPrefersObservationOverArtifactAndMetadata(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+
+	artifactPath := filepath.Join(runtimeRoot, "artifacts", "reports", "procedure.md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll artifact returned error: %v", err)
+	}
+	artifactBody := "# Procedure\n\nSteps:\n- artifact_step\n"
+	if err := os.WriteFile(artifactPath, []byte(artifactBody), 0o644); err != nil {
+		t.Fatalf("WriteFile artifact returned error: %v", err)
+	}
+
+	observationPath := filepath.Join(runtimeRoot, "observations", "os", "procedure.json")
+	if err := os.MkdirAll(filepath.Dir(observationPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll observation returned error: %v", err)
+	}
+	payload := map[string]any{
+		"procedure_steps": "observation_step\nvalidate_policy",
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent returned error: %v", err)
+	}
+	if err := os.WriteFile(observationPath, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile observation returned error: %v", err)
+	}
+
+	evidence := runner.procedureEvidenceForTask(airuntime.Task{
+		TaskID: "task-priority",
+		Metadata: map[string]string{
+			"custom_artifact":    artifactPath,
+			"custom_observation": observationPath,
+			"procedure_steps":    "metadata_step",
+		},
+	})
+	if evidence.Steps != "observation_step\nvalidate_policy" {
+		t.Fatalf("expected observation evidence to win, got %+v", evidence)
+	}
+}
+
+func TestRunMemoryConsolidatePersistsProcedureEvidence(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, nil)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:         "Consolidate expense audit memory",
+		Goal:          "Summarize reusable expense audit memory",
+		SelectedSkill: "memory-consolidate",
+		Metadata: map[string]string{
+			"task_class":               "expense_audit_memory",
+			"card_type":                "procedure",
+			"scope":                    "project",
+			"procedure_steps":          "collect_runs\nvalidate_policy\npromote_fact",
+			"procedure_guardrails":     "never promote unsupported claims",
+			"procedure_summary":        "Consolidate repeated expense audit evidence before promotion.",
+			"procedure_success_signal": "promotions recorded with evidence",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	result, err := runner.RunTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if len(result.ArtifactPaths) != 1 || len(result.ObservationPaths) != 1 {
+		t.Fatalf("expected one artifact and one observation, got artifacts=%d observations=%d", len(result.ArtifactPaths), len(result.ObservationPaths))
+	}
+	artifactData, err := os.ReadFile(result.ArtifactPaths[0])
+	if err != nil {
+		t.Fatalf("ReadFile artifact returned error: %v", err)
+	}
+	if !strings.Contains(string(artifactData), "## Procedure Candidate") || !strings.Contains(string(artifactData), "validate_policy") {
+		t.Fatalf("expected procedure hints in memory artifact, got %q", string(artifactData))
+	}
+	observationData, err := os.ReadFile(result.ObservationPaths[0])
+	if err != nil {
+		t.Fatalf("ReadFile observation returned error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(observationData, &payload); err != nil {
+		t.Fatalf("Unmarshal observation returned error: %v", err)
+	}
+	if payload["procedure_steps"] != "collect_runs\nvalidate_policy\npromote_fact" {
+		t.Fatalf("expected procedure steps in memory observation, got %+v", payload)
+	}
+	stored, err := runtimeStore.GetTask(task.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask returned error: %v", err)
+	}
+	if strings.TrimSpace(stored.Metadata["memory_observation"]) == "" {
+		t.Fatalf("expected memory_observation metadata to be set, got %+v", stored.Metadata)
+	}
+}
+
 func TestRunWebSearchCompletesTask(t *testing.T) {
 	runtimeRoot := tempSkillRuntimeRoot(t)
 	workspaceRoot := t.TempDir()

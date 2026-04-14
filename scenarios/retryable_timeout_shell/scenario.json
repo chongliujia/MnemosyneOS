@@ -1,0 +1,64 @@
+{
+  "name": "retryable_timeout_shell",
+  "description": "Run a retryable shell timeout that succeeds on the second attempt and assert retry observability.",
+  "tags": [
+    "execution",
+    "shell",
+    "retry",
+    "observability"
+  ],
+  "lane": "regression",
+  "steps": [
+    {
+      "id": "submit_shell_retry",
+      "type": "submit_task",
+      "title": "Run a retryable shell timeout",
+      "goal": "Run a shell command that times out once and succeeds on retry",
+      "selected_skill": "shell-command",
+      "metadata": {
+        "command": "python3",
+        "args": "-c \"import pathlib,time,sys;p=pathlib.Path('retryable-timeout-flag');sys.stdout.write('recovered\\\\n') if p.exists() else (p.write_text('1'),time.sleep(0.15))\"",
+        "timeout_ms": "60",
+        "max_attempts": "2",
+        "idempotency_key": "retryable-timeout-shell"
+      }
+    },
+    {
+      "id": "run_shell_retry",
+      "type": "run_task",
+      "task_ref": "submit_shell_retry"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "selected_skill",
+      "step": "run_shell_retry",
+      "equals": "shell-command"
+    },
+    {
+      "type": "task_state",
+      "step": "run_shell_retry",
+      "equals": "done"
+    },
+    {
+      "type": "action_attempt_count",
+      "step": "run_shell_retry",
+      "expected": 2
+    },
+    {
+      "type": "retry_succeeded",
+      "step": "run_shell_retry",
+      "equals": "true"
+    },
+    {
+      "type": "artifact_contains",
+      "step": "run_shell_retry",
+      "contains": "recovered"
+    },
+    {
+      "type": "observation_count",
+      "step": "run_shell_retry",
+      "min": 1
+    }
+  ]
+}
