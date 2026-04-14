@@ -31,6 +31,7 @@ type ActionRecord struct {
 	ChangedFiles     []string          `json:"changed_files,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	Attempt          int               `json:"attempt,omitempty"`
+	AttemptHistory   []ActionAttempt   `json:"attempt_history,omitempty"`
 	IdempotencyKey   string            `json:"idempotency_key,omitempty"`
 	Retryable        bool              `json:"retryable,omitempty"`
 	FailureCategory  string            `json:"failure_category,omitempty"`
@@ -42,6 +43,17 @@ type ActionRecord struct {
 	FinishedAt       *time.Time        `json:"finished_at,omitempty"`
 }
 
+type ActionAttempt struct {
+	Attempt         int        `json:"attempt"`
+	Status          string     `json:"status"`
+	FailureCategory string     `json:"failure_category,omitempty"`
+	Retryable       bool       `json:"retryable,omitempty"`
+	ExitCode        int        `json:"exit_code,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	StartedAt       time.Time  `json:"started_at"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+}
+
 type ShellActionRequest struct {
 	TaskID           string            `json:"task_id,omitempty"`
 	Command          string            `json:"command"`
@@ -49,6 +61,7 @@ type ShellActionRequest struct {
 	Workdir          string            `json:"workdir,omitempty"`
 	TimeoutMS        int               `json:"timeout_ms,omitempty"`
 	Attempt          int               `json:"attempt,omitempty"`
+	MaxAttempts      int               `json:"max_attempts,omitempty"`
 	IdempotencyKey   string            `json:"idempotency_key,omitempty"`
 	ExecutionProfile string            `json:"execution_profile,omitempty"`
 	ApprovalToken    string            `json:"approval_token,omitempty"`
@@ -59,6 +72,7 @@ type FileReadActionRequest struct {
 	TaskID           string            `json:"task_id,omitempty"`
 	Path             string            `json:"path"`
 	Attempt          int               `json:"attempt,omitempty"`
+	MaxAttempts      int               `json:"max_attempts,omitempty"`
 	IdempotencyKey   string            `json:"idempotency_key,omitempty"`
 	ExecutionProfile string            `json:"execution_profile,omitempty"`
 	ApprovalToken    string            `json:"approval_token,omitempty"`
@@ -71,6 +85,7 @@ type FileWriteActionRequest struct {
 	Content          string            `json:"content"`
 	CreateParents    bool              `json:"create_parents,omitempty"`
 	Attempt          int               `json:"attempt,omitempty"`
+	MaxAttempts      int               `json:"max_attempts,omitempty"`
 	IdempotencyKey   string            `json:"idempotency_key,omitempty"`
 	ExecutionProfile string            `json:"execution_profile,omitempty"`
 	ApprovalToken    string            `json:"approval_token,omitempty"`

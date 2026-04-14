@@ -26,6 +26,17 @@ type Executor struct {
 	approvalStore *approval.Store
 }
 
+type shellAttemptResult struct {
+	stdout          string
+	stderr          string
+	exitCode        int
+	err             error
+	failureCategory string
+	retryable       bool
+	startedAt       time.Time
+	finishedAt      time.Time
+}
+
 func NewExecutor(store *Store, workspaceRoot string) (*Executor, error) {
 	return NewExecutorWithRootToken(store, workspaceRoot, "")
 }
@@ -84,46 +95,53 @@ func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
 		Metadata:         cloneMetadata(req.Metadata),
 		StartedAt:        time.Now().UTC(),
 	}
+	maxAttempts := normalizeMaxAttempts(req.MaxAttempts, record.Attempt)
 	if err := e.store.Save(record); err != nil {
 		return ActionRecord{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	for attempt := record.Attempt; attempt <= maxAttempts; attempt++ {
+		record.Attempt = attempt
+		result := e.runShellAttempt(commandPath, req.Args, workdir, timeout)
+		record.AttemptHistory = append(record.AttemptHistory, ActionAttempt{
+			Attempt:         attempt,
+			Status:          attemptStatus(result.err),
+			FailureCategory: result.failureCategory,
+			Retryable:       result.retryable,
+			ExitCode:        result.exitCode,
+			Error:           errorString(result.err),
+			StartedAt:       result.startedAt,
+			FinishedAt:      timestampPtr(result.finishedAt),
+		})
+		record.Stdout = result.stdout
+		record.Stderr = result.stderr
+		record.ExitCode = result.exitCode
+		record.Error = errorString(result.err)
+		record.FailureCategory = result.failureCategory
+		record.Retryable = result.retryable
+		record.FinishedAt = timestampPtr(result.finishedAt)
 
-	cmd := exec.CommandContext(ctx, commandPath, req.Args...)
-	cmd.Dir = workdir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-
-	record.Stdout = stdout.String()
-	record.Stderr = stderr.String()
-	finishedAt := time.Now().UTC()
-	record.FinishedAt = &finishedAt
-
-	if runErr != nil {
-		record.Status = ActionStatusFailed
-		record.Error = runErr.Error()
-		var exitErr *exec.ExitError
-		if errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
-			record.FailureCategory = ActionFailureTimeout
-			record.Retryable = true
-		} else if errors.As(runErr, &exitErr) {
-			record.ExitCode = exitErr.ExitCode()
-			record.FailureCategory = ActionFailureProcessExit
-		} else {
-			record.FailureCategory = ActionFailureExecution
+		if result.err == nil {
+			record.Status = ActionStatusCompleted
+			record.Retryable = false
+			record.Error = ""
+			record.FailureCategory = ""
+			if err := e.store.Move(record, ActionStatusCompleted); err != nil {
+				return ActionRecord{}, err
+			}
+			return record, nil
 		}
-		if err := e.store.Move(record, ActionStatusFailed); err != nil {
-			return ActionRecord{}, err
+		if !result.retryable || attempt >= maxAttempts {
+			record.Status = ActionStatusFailed
+			if err := e.store.Move(record, ActionStatusFailed); err != nil {
+				return ActionRecord{}, err
+			}
+			return record, nil
 		}
-		return record, nil
 	}
 
-	record.Status = ActionStatusCompleted
-	if err := e.store.Move(record, ActionStatusCompleted); err != nil {
+	record.Status = ActionStatusFailed
+	if err := e.store.Move(record, ActionStatusFailed); err != nil {
 		return ActionRecord{}, err
 	}
 	return record, nil
@@ -166,6 +184,15 @@ func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, err
 		record.Status = ActionStatusFailed
 		record.Error = readErr.Error()
 		record.FailureCategory = ActionFailureIO
+		record.AttemptHistory = []ActionAttempt{{
+			Attempt:         record.Attempt,
+			Status:          ActionStatusFailed,
+			FailureCategory: ActionFailureIO,
+			Retryable:       false,
+			Error:           readErr.Error(),
+			StartedAt:       record.StartedAt,
+			FinishedAt:      &finishedAt,
+		}}
 		if err := e.store.Move(record, ActionStatusFailed); err != nil {
 			return ActionRecord{}, err
 		}
@@ -174,6 +201,12 @@ func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, err
 
 	record.Status = ActionStatusCompleted
 	record.Stdout = string(data)
+	record.AttemptHistory = []ActionAttempt{{
+		Attempt:    record.Attempt,
+		Status:     ActionStatusCompleted,
+		StartedAt:  record.StartedAt,
+		FinishedAt: &finishedAt,
+	}}
 	if err := e.store.Move(record, ActionStatusCompleted); err != nil {
 		return ActionRecord{}, err
 	}
@@ -218,6 +251,15 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 			record.FailureCategory = ActionFailureIO
 			finishedAt := time.Now().UTC()
 			record.FinishedAt = &finishedAt
+			record.AttemptHistory = []ActionAttempt{{
+				Attempt:         record.Attempt,
+				Status:          ActionStatusFailed,
+				FailureCategory: ActionFailureIO,
+				Retryable:       false,
+				Error:           err.Error(),
+				StartedAt:       record.StartedAt,
+				FinishedAt:      &finishedAt,
+			}}
 			if moveErr := e.store.Move(record, ActionStatusFailed); moveErr != nil {
 				return ActionRecord{}, moveErr
 			}
@@ -231,6 +273,15 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 		record.Status = ActionStatusFailed
 		record.Error = writeErr.Error()
 		record.FailureCategory = ActionFailureIO
+		record.AttemptHistory = []ActionAttempt{{
+			Attempt:         record.Attempt,
+			Status:          ActionStatusFailed,
+			FailureCategory: ActionFailureIO,
+			Retryable:       false,
+			Error:           writeErr.Error(),
+			StartedAt:       record.StartedAt,
+			FinishedAt:      &finishedAt,
+		}}
 		if err := e.store.Move(record, ActionStatusFailed); err != nil {
 			return ActionRecord{}, err
 		}
@@ -239,6 +290,12 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 
 	record.Status = ActionStatusCompleted
 	record.Stdout = fmt.Sprintf("wrote %d bytes", len(req.Content))
+	record.AttemptHistory = []ActionAttempt{{
+		Attempt:    record.Attempt,
+		Status:     ActionStatusCompleted,
+		StartedAt:  record.StartedAt,
+		FinishedAt: &finishedAt,
+	}}
 	if err := e.store.Move(record, ActionStatusCompleted); err != nil {
 		return ActionRecord{}, err
 	}
@@ -346,6 +403,75 @@ func normalizeAttempt(explicit int, metadata map[string]string) int {
 		}
 	}
 	return 1
+}
+
+func normalizeMaxAttempts(explicit, attempt int) int {
+	if explicit > 0 {
+		if explicit < attempt {
+			return attempt
+		}
+		return explicit
+	}
+	if attempt <= 0 {
+		return 1
+	}
+	return attempt
+}
+
+func (e *Executor) runShellAttempt(commandPath string, args []string, workdir string, timeout time.Duration) shellAttemptResult {
+	startedAt := time.Now().UTC()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, commandPath, args...)
+	cmd.Dir = workdir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	result := shellAttemptResult{
+		stdout:     stdout.String(),
+		stderr:     stderr.String(),
+		err:        runErr,
+		startedAt:  startedAt,
+		finishedAt: time.Now().UTC(),
+	}
+	if runErr == nil {
+		return result
+	}
+	var exitErr *exec.ExitError
+	if errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
+		result.failureCategory = ActionFailureTimeout
+		result.retryable = true
+		return result
+	}
+	if errors.As(runErr, &exitErr) {
+		result.exitCode = exitErr.ExitCode()
+		result.failureCategory = ActionFailureProcessExit
+		return result
+	}
+	result.failureCategory = ActionFailureExecution
+	return result
+}
+
+func attemptStatus(err error) string {
+	if err == nil {
+		return ActionStatusCompleted
+	}
+	return ActionStatusFailed
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func timestampPtr(ts time.Time) *time.Time {
+	out := ts
+	return &out
 }
 
 func (e *Executor) authorizeProfile(profile, approvalToken string) error {

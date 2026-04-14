@@ -39,6 +39,9 @@ func TestExecuteFileWriteAndRead(t *testing.T) {
 	if writeRecord.IdempotencyKey != "file-write-notes-output" {
 		t.Fatalf("unexpected idempotency key: %q", writeRecord.IdempotencyKey)
 	}
+	if len(writeRecord.AttemptHistory) != 1 || writeRecord.AttemptHistory[0].Status != ActionStatusCompleted {
+		t.Fatalf("expected one completed write attempt, got %#v", writeRecord.AttemptHistory)
+	}
 
 	path := filepath.Join(workspaceRoot, "notes", "output.txt")
 	data, err := os.ReadFile(path)
@@ -55,6 +58,9 @@ func TestExecuteFileWriteAndRead(t *testing.T) {
 	}
 	if readRecord.Stdout != "mnemosyne runtime" {
 		t.Fatalf("unexpected read output: %q", readRecord.Stdout)
+	}
+	if len(readRecord.AttemptHistory) != 1 || readRecord.AttemptHistory[0].Status != ActionStatusCompleted {
+		t.Fatalf("expected one completed read attempt, got %#v", readRecord.AttemptHistory)
 	}
 
 	if _, err := store.Get(writeRecord.ActionID); err != nil {
@@ -92,6 +98,9 @@ func TestExecuteShellAllowedCommand(t *testing.T) {
 	if record.IdempotencyKey != "shell-pwd" {
 		t.Fatalf("unexpected idempotency key: %q", record.IdempotencyKey)
 	}
+	if len(record.AttemptHistory) != 1 || record.AttemptHistory[0].Status != ActionStatusCompleted {
+		t.Fatalf("expected one completed shell attempt, got %#v", record.AttemptHistory)
+	}
 }
 
 func TestExecuteShellTimeoutMarkedRetryable(t *testing.T) {
@@ -105,10 +114,11 @@ func TestExecuteShellTimeoutMarkedRetryable(t *testing.T) {
 	}
 
 	record, err := executor.ExecuteShell(ShellActionRequest{
-		Command:   "python3",
-		Args:      []string{"-c", "import time; time.sleep(0.05)"},
-		TimeoutMS: 1,
-		Attempt:   3,
+		Command:     "python3",
+		Args:        []string{"-c", "import time; time.sleep(0.05)"},
+		TimeoutMS:   1,
+		Attempt:     3,
+		MaxAttempts: 4,
 	})
 	if err != nil {
 		t.Fatalf("ExecuteShell returned error: %v", err)
@@ -122,8 +132,16 @@ func TestExecuteShellTimeoutMarkedRetryable(t *testing.T) {
 	if record.FailureCategory != ActionFailureTimeout {
 		t.Fatalf("expected timeout failure category, got %s", record.FailureCategory)
 	}
-	if record.Attempt != 3 {
-		t.Fatalf("expected attempt=3, got %d", record.Attempt)
+	if record.Attempt != 4 {
+		t.Fatalf("expected final attempt=4, got %d", record.Attempt)
+	}
+	if len(record.AttemptHistory) != 2 {
+		t.Fatalf("expected two timeout attempts, got %#v", record.AttemptHistory)
+	}
+	for _, attempt := range record.AttemptHistory {
+		if attempt.FailureCategory != ActionFailureTimeout || !attempt.Retryable {
+			t.Fatalf("expected timeout retryable attempts, got %#v", record.AttemptHistory)
+		}
 	}
 }
 
@@ -155,6 +173,9 @@ func TestExecuteShellProcessExitNotRetryable(t *testing.T) {
 	}
 	if record.ExitCode != 7 {
 		t.Fatalf("expected exit code 7, got %d", record.ExitCode)
+	}
+	if len(record.AttemptHistory) != 1 || record.AttemptHistory[0].FailureCategory != ActionFailureProcessExit {
+		t.Fatalf("expected one process-exit attempt, got %#v", record.AttemptHistory)
 	}
 }
 
