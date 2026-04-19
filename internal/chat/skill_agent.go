@@ -72,6 +72,61 @@ func (a *SkillAgent) DecideWithContext(message, conversationContext string) Skil
 	}
 }
 
+func heuristicSkillDecisionWithCandidates(message, conversationContext string, candidates []string) (SkillDecision, bool) {
+	decision, ok := heuristicSkillDecision(message, conversationContext)
+	if !ok {
+		return SkillDecision{}, false
+	}
+	if len(candidates) == 0 {
+		return decision, true
+	}
+	for _, candidate := range candidates {
+		if decision.Skill == candidate {
+			return decision, true
+		}
+	}
+	return SkillDecision{Skill: candidates[0], Reason: "prefiltered candidate fallback", Confidence: 0.6}, true
+}
+
+func prefilterCandidateSkills(message, conversationContext string, state SessionState) []string {
+	text := strings.ToLower(strings.TrimSpace(message + "\n" + conversationContext))
+	candidates := make([]string, 0, 4)
+	add := func(skill string) {
+		for _, existing := range candidates {
+			if existing == skill {
+				return
+			}
+		}
+		candidates = append(candidates, skill)
+	}
+	if strings.TrimSpace(state.FocusTaskID) != "" && containsAnyMarker(text, "continue", "继续", "展开", "接着", "follow up", "summarize") {
+		add(SkillWebSearch)
+		add(SkillEmailInbox)
+		add(SkillGitHubIssueSearch)
+		add(SkillTaskPlan)
+	}
+	switch {
+	case containsAnyMarker(text, "搜索", "查一下", "查找", "research", "search", "web", "look up", "google"):
+		add(SkillWebSearch)
+	case containsAnyMarker(text, "github", "issue", "issues", "仓库问题", "工单", "议题"):
+		add(SkillGitHubIssueSearch)
+	case containsAnyMarker(text, "email", "mail", "inbox", "邮件", "邮箱", "收件箱"):
+		add(SkillEmailInbox)
+	case (strings.Contains(message, "目录") || strings.Contains(message, "文件夹")) &&
+		!strings.Contains(message, "文件") &&
+		containsAnyMarker(text, "创建", "新建", "建立"):
+		add(SkillShellCommand)
+	case containsAnyMarker(text, "edit", "write", "update", "修改", "编辑", "写入", "更新", "创建", "新建", "生成") && containsAnyMarker(text, "file", "readme", "文件", "文档", "note"):
+		add(SkillFileEdit)
+	case containsAnyMarker(text, "read", "读取", "查看") && containsAnyMarker(text, "file", "readme", "文件", "文档", "note"):
+		add(SkillFileRead)
+	case containsAnyMarker(text, "shell", "command", "run", "execute", "终端", "命令", "运行", "执行"):
+		add(SkillShellCommand)
+	}
+	add(SkillTaskPlan)
+	return candidates
+}
+
 func (a *SkillAgent) modelSkillDecision(message, conversationContext string) (SkillDecision, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -119,10 +174,14 @@ func heuristicSkillDecision(message, conversationContext string) (SkillDecision,
 		return SkillDecision{Skill: SkillEmailInbox, Reason: "contains email marker", Confidence: 0.9}, true
 	case containsAnyMarker(text, "consolidate memory", "memory consolidate", "记忆整理", "整合记忆", "memory summary"):
 		return SkillDecision{Skill: SkillMemoryConsolidate, Reason: "explicit memory consolidation request", Confidence: 0.88}, true
+	case (strings.Contains(message, "目录") || strings.Contains(message, "文件夹")) &&
+		!strings.Contains(message, "文件") &&
+		containsAnyMarker(text, "创建", "新建", "建立"):
+		return SkillDecision{Skill: SkillShellCommand, Reason: "create directory request", Confidence: 0.84}, true
+	case containsAnyMarker(text, "edit", "write", "update", "修改", "编辑", "写入", "更新", "创建", "新建", "生成") && containsAnyMarker(text, "file", "readme", "文件", "文档", "note"):
+		return SkillDecision{Skill: SkillFileEdit, Reason: "contains file create/edit marker", Confidence: 0.86}, true
 	case containsAnyMarker(text, "read", "读取", "查看") && containsAnyMarker(text, "file", "readme", "文件", "文档", "note"):
 		return SkillDecision{Skill: SkillFileRead, Reason: "contains file read marker", Confidence: 0.86}, true
-	case containsAnyMarker(text, "edit", "write", "update", "修改", "编辑", "写入", "更新") && containsAnyMarker(text, "file", "readme", "文件", "文档", "note"):
-		return SkillDecision{Skill: SkillFileEdit, Reason: "contains file edit marker", Confidence: 0.86}, true
 	case containsAnyMarker(text, "shell", "command", "run", "execute", "终端", "命令", "运行", "执行"):
 		return SkillDecision{Skill: SkillShellCommand, Reason: "contains shell command marker", Confidence: 0.84}, true
 	default:

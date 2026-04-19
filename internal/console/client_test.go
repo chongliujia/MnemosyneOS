@@ -42,7 +42,7 @@ func TestClientTaskFlow(t *testing.T) {
 	}
 	skillRunner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
 	recallService := recall.NewService(memoryStore)
-	chatService := chat.NewService(chat.NewStore(runtimeRoot), orchestrator, runtimeStore, recallService, skillRunner, nil)
+	chatService := chat.NewService(chat.NewStore(runtimeRoot), orchestrator, runtimeStore, recallService, skillRunner, nil, memoryStore)
 	handler := api.NewServer(memoryStore, runtimeStore, approvalStore, chatService, recallService, orchestrator, executor, skillRunner, modelConfig).Routes()
 
 	client := NewClient("http://mnemosyne.test")
@@ -89,6 +89,65 @@ func TestClientTaskFlow(t *testing.T) {
 	}
 	if result.Task.State != airuntime.TaskStateDone {
 		t.Fatalf("expected done task, got %s", result.Task.State)
+	}
+}
+
+func TestClientChatFlow(t *testing.T) {
+	runtimeRoot := tempConsoleRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	modelConfig, err := model.NewConfigStore(runtimeRoot)
+	if err != nil {
+		t.Fatalf("NewConfigStore returned error: %v", err)
+	}
+	if err := modelConfig.Save(model.Config{Provider: "none"}); err != nil {
+		t.Fatalf("Save model config returned error: %v", err)
+	}
+	skillRunner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	recallService := recall.NewService(memoryStore)
+	chatService := chat.NewService(chat.NewStore(runtimeRoot), orchestrator, runtimeStore, recallService, skillRunner, nil, memoryStore)
+	handler := api.NewServer(memoryStore, runtimeStore, approvalStore, chatService, recallService, orchestrator, executor, skillRunner, modelConfig).Routes()
+
+	client := NewClient("http://mnemosyne.test")
+	client.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			return rec.Result(), nil
+		}),
+	}
+
+	resp, err := client.SendChat(chat.SendRequest{
+		SessionID:   "default",
+		Message:     "你好",
+		RequestedBy: "test",
+		Source:      "console-test",
+	})
+	if err != nil {
+		t.Fatalf("SendChat returned error: %v", err)
+	}
+	if resp.AssistantMessage.Role != "assistant" {
+		t.Fatalf("expected assistant role, got %+v", resp.AssistantMessage)
+	}
+	if resp.AssistantMessage.Content == "" {
+		t.Fatalf("expected assistant content")
+	}
+
+	messages, err := client.ChatMessages("default", 10)
+	if err != nil {
+		t.Fatalf("ChatMessages returned error: %v", err)
+	}
+	if len(messages) < 2 {
+		t.Fatalf("expected persisted chat messages, got %d", len(messages))
 	}
 }
 

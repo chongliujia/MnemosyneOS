@@ -32,20 +32,79 @@ MnemosyneOS is both:
 
 ## Quick Start (Go Service)
 
-### 0) Local config
-
-Create a local config file from the example:
+### 0) One command to start
 
 ```bash
-cp .env.example .env.local
+go run ./cmd/mnemosynectl
 ```
 
-Both `mnemosyne-api` and `mnemosynectl` automatically load `.env.local` if present.
+That's it. This single command will:
+1. Auto-bootstrap the runtime if it doesn't exist
+2. Launch a **background daemon** (persists after you close the chat)
+3. Drop you into an interactive chat REPL
 
-### 1) Run API service
+The daemon runs as a background process — you can close the chat, do other work,
+then come back later with `mnemosynectl` or open the web UI anytime.
+
+### Daemon management
 
 ```bash
-go run ./cmd/mnemosyne-api
+mnemosynectl start          # Start the daemon in the background
+mnemosynectl stop           # Stop the daemon
+mnemosynectl restart        # Restart the daemon
+mnemosynectl status         # Show daemon status, runtime info, tasks
+mnemosynectl logs           # View daemon log output
+mnemosynectl logs -n 100    # Last 100 lines
+```
+
+### Chat anytime
+
+```bash
+mnemosynectl                # Opens chat (auto-starts daemon if needed)
+mnemosynectl chat           # Same as above
+mnemosynectl ask "What's my schedule?"   # One-shot question
+```
+
+### Web UI
+
+While the daemon is running, open:
+
+```text
+http://127.0.0.1:8080/ui/chat
+```
+
+### 0.5) Optional: pre-configure a model
+
+If you want LLM-powered AgentOS behavior, configure any chat-completions
+compatible model first. The LLM is the planner/controller; local work is done
+by MnemosyneOS skills and, as the tool surface expands, MCP-backed tools.
+
+```bash
+go run ./cmd/mnemosynectl init \
+  --provider siliconflow \
+  --api-key "$SILICONFLOW_API_KEY" \
+  --model "Qwen/Qwen2.5-7B-Instruct"
+```
+
+`init` writes the active model config to an ignored local file such as
+`runtime/model/local.config.json` and records the path in `.env.local` via
+`MNEMOSYNE_MODEL_CONFIG_PATH`. Keep the committed `runtime/model/config.json`
+as a safe `provider=none` default; do not commit API keys.
+
+For file/code operations, the selected model must support OpenAI-compatible
+`tool_calls`. This is a capability requirement, not an OpenAI-only requirement:
+DeepSeek, SiliconFlow, OpenAI, or any compatible endpoint can work if the
+selected model exposes tool calling. Run `mnemosynectl doctor --test-model` to
+check both text generation and tool-calling support.
+
+Or configure later via the web UI at `/ui/models`.
+
+### 1) Advanced: run the server in the foreground
+
+If you prefer to run the server in the foreground (e.g. for debugging):
+
+```bash
+go run ./cmd/mnemosynectl serve --ui web
 ```
 
 Default address: `http://127.0.0.1:8080`  
@@ -77,7 +136,10 @@ Optional root approval token:
 With the API service running:
 
 ```bash
+go run ./cmd/mnemosynectl doctor
+go run ./cmd/mnemosynectl chat
 go run ./cmd/mnemosynectl status
+go run ./cmd/mnemosynectl ask "你好"
 go run ./cmd/mnemosynectl ask "Plan the next repository step"
 go run ./cmd/mnemosynectl tasks
 go run ./cmd/mnemosynectl run <task-id>
@@ -85,6 +147,9 @@ go run ./cmd/mnemosynectl recall "approval agentos"
 go run ./cmd/mnemosynectl approvals
 go run ./cmd/mnemosynectl approve-action <approval-id>
 ```
+
+`mnemosynectl ask` now sends a real chat turn to `/chat` and prints the assistant reply.
+`mnemosynectl chat` opens an interactive REPL over the same session-aware chat API.
 
 Default API base: `http://127.0.0.1:8080`  
 Override with env: `MNEMOSYNE_API_BASE=http://127.0.0.1:8090`
@@ -125,6 +190,52 @@ go run ./cmd/mnemosyne-harness -save-baseline ./runs -baseline-dir ./baselines/h
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -tags email
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -lane regression
+./scripts/ci-harness.sh smoke
+./scripts/ci-harness.sh regression
+./scripts/refresh-harness-baselines.sh
+make ci
+```
+
+CI discipline:
+
+- `make test-go` runs the Go test suite.
+- `./scripts/ci-harness.sh <lane>` runs a harness lane, emits a rollup, and fails on baseline drift.
+- `./scripts/refresh-harness-baselines.sh` intentionally regenerates committed harness baselines.
+- `.github/workflows/ci.yml` gates pull requests on `go test`, `smoke`, and `regression`.
+
+### 6) Background service (macOS launchd, openclaw-style)
+
+One-command background install (runs on login, auto-restart on crash):
+
+```bash
+make build-ctl
+make service-install-macos
+# or directly:
+# ./scripts/install-macos-service.sh
+```
+
+Defaults:
+- Address: `:8080` → `http://127.0.0.1:8080`
+- Runtime root: `~/.mnemosyneos/runtime`
+- Binary installed to: `~/.mnemosyneos/bin/mnemosynectl`
+
+Verify and use:
+```bash
+curl http://127.0.0.1:8080/health
+go run ./cmd/mnemosynectl chat
+open http://127.0.0.1:8080/ui/chat
+```
+
+Customize (optional):
+```bash
+./scripts/install-macos-service.sh --addr :8090 --workspace-root "$(pwd)" --runtime-root "$HOME/.mnemosyneos/runtime"
+```
+
+Uninstall:
+```bash
+make service-uninstall-macos
+# or:
+# ./scripts/uninstall-macos-service.sh
 ```
 
 Current non-GitHub baseline scenarios:
@@ -143,13 +254,13 @@ Current non-GitHub baseline scenarios:
 
 Model settings:
 
-- runtime model configuration is persisted at `runtime/model/config.json`
-- supported provider shape in this version:
-  - `openai-compatible`
-- supported presets:
+- committed `runtime/model/config.json` is the safe default and should not contain secrets
+- real local model credentials live in the ignored path selected by `MNEMOSYNE_MODEL_CONFIG_PATH`
+- supported providers in this version:
   - `deepseek`
+  - `siliconflow`
   - `openai`
-  - `custom`
+  - `openai-compatible`
 - the UI now splits configuration into three profiles:
   - `conversation model`
   - `routing model`
@@ -158,6 +269,7 @@ Model settings:
 - conversation and skills/summary profiles expose independent temperature settings
 - routing remains deterministic at temperature `0`
 - the `Test Connection` action verifies provider, key, base URL, and selected routing model without restarting the server
+- `mnemosynectl doctor --test-model` also verifies tool-calling support, which is required for AgentOS skills/MCP-style work
 
 Current web search MVP behavior:
 
@@ -220,6 +332,45 @@ Most AI memory systems today:
 
 MnemosyneOS treats memory as part of a larger AgentOS: a structured, evolving cognitive system that can observe, plan, act, remember, and resume work across time.
 
+## Agent Skills System
+
+MnemosyneOS includes a built-in **Agent Skills System** that enables the LLM to autonomously call tools during conversations. This is the AgentOS contract: the LLM reasons and selects tools; skills and MCP-style adapters perform local work under runtime policy.
+
+### How it works
+
+When you chat with MnemosyneOS, the LLM decides whether to:
+- **Reply directly** — for greetings, simple questions, conversation
+- **Call tools** — when it needs real data (files, directories, web search, etc.)
+- **Chain multiple tools** — e.g., first get system info, then list a directory, then read a file
+
+The agent loop runs up to 6 tool-calling rounds before producing a final response.
+
+### Built-in Skills
+
+| Skill | Description |
+|-------|-------------|
+| `get_system_info` | Workspace path, runtime root, version, server address, current time |
+| `read_file` | Read file contents (auto-truncates large files) |
+| `list_directory` | List files and directories at a given path |
+| `run_command` | Execute shell commands (git, system info, builds, etc.) |
+| `web_search` | Search the web via configured search provider |
+| `recall_memory` | Search long-term memory for relevant facts and procedures |
+| `list_tasks` | List recent tasks in the runtime |
+
+### Example interaction
+
+```
+❯ 我的项目在哪里？有哪些文件？
+
+  [调用 get_system_info]
+  [调用 list_directory]
+
+  你的 MnemosyneOS 项目位于 /Users/you/My-Github-Project/MnemosyneOS。
+  主要文件包括：cmd/, internal/, runtime/, README.md, Makefile, go.mod ...
+```
+
+The LLM automatically determines which tools to use and synthesizes a natural-language response from the results.
+
 ## Platform Direction
 
 MnemosyneOS is not just a memory plugin. It is designed as:
@@ -234,35 +385,50 @@ MnemosyneOS is not just a memory plugin. It is designed as:
 
 ## Core Architecture
 
-### 1. Journal Layer
+### 1. Journal Layer ✅
 
-Append-only event log
-Crash-recoverable
-Replayable
+Append-only JSONL event log (`memory/journal.jsonl`).
+Every card create/update/touch/decay is recorded with timestamp, event type, entity ID, and version.
+Used for auditing and future crash-recovery replay.
 
-### 2. Card Layer
+### 2. Card Layer ✅
 
-Structured memory units:
+Structured memory units with versioned history and disk persistence:
 
 * Event Cards (episodic memory)
 * Fact Cards (semantic memory)
 * Preference Cards
 * Plan/Commitment Cards
 * Self/Goal Kernel Cards
+* Procedure Cards (extracted from repeated task runs)
 
-### 3. Dual Graph Layer
+Cards are persisted as JSON files under `<runtime>/memory/cards/` and survive restarts.
 
-* Episodic Graph (narrative continuity)
-* Semantic Graph (knowledge structure)
-* Evidence Bridges between them
+### 3. Dual Graph Layer ✅ (partial)
 
-### 4. Governance Layer
+* Edges with weight, confidence, temporal validity, evidence refs
+* Edges persisted as JSON under `<runtime>/memory/edges/`
+* `edgesByCard` index for efficient traversal
+* Episodic / Semantic graph distinction (not yet enforced, edges are untyped beyond `edge_type`)
 
-* Consolidation daemon
-* Reconsolidation (conflict handling)
-* Activation-based decay
-* Compaction & log rotation
-* Projection rebuild & verification
+### 4. Governance Layer ✅
+
+* **Background scheduler**: `GovernanceScheduler` runs every hour (configurable):
+  - Activation-based decay with per-card policies (`session_use` 5× faster, `durable` 5× slower, `never`)
+  - Active → Stale → Archived lifecycle based on score thresholds
+  - **Event → Fact upgrade** (automatic episodic-to-semantic consolidation)
+  - **Conflict detection** (finds contradicting facts, logs warnings)
+* Consolidator promotes candidates, supersedes old cards
+* `RebuildProjections()` for disaster recovery from journal
+* `VerifyIntegrity()` for snapshot-vs-journal consistency checks
+
+### 5. Chat → Memory Bridge ✅
+
+* Every substantive chat exchange automatically creates an episodic **event card**
+* Event cards carry: topic, summary, user query, session ID, skill used
+* Cards use `session_use` decay policy (fast decay for session-scoped ephemeral memory)
+* Governance scheduler periodically upgrades recurring event patterns into **fact cards**
+* Memory recall results are injected into LLM prompts (working notes, semantic hits, procedure guidance)
 
 ---
 
@@ -342,38 +508,46 @@ The current test strategy is:
 
 # 四、ROADMAP
 
-## Phase 0 – Concept Stabilization
+## Phase 0 – Concept Stabilization ✅
 
-* Define Card schema
-* Define Edge types
-* Define Dual Graph structure
+* ✅ Define Card schema (`memory.Card`, versioned, temporal validity)
+* ✅ Define Edge types (`memory.Edge`, weighted, evidence-backed)
+* ✅ Define Dual Graph structure (cards + edges with `edgesByCard` index)
 * Define Memory-VFS API
 
-## Phase 1 – Minimal Memory Core
+## Phase 1 – Minimal Memory Core ✅
 
-* Event journal
-* Card creation
-* Graph linking
-* Basic querying
-* As-of temporal queries
+* ✅ Event journal (append-only JSONL at `memory/journal.jsonl`)
+* ✅ Card creation, update, touch (version chain, activation tracking)
+* ✅ Graph linking (`CreateEdge` with referential integrity)
+* ✅ Basic querying (by ID, type, scope, status)
+* ✅ As-of temporal queries (`resolveAsOf` with `ValidFrom`/`ValidTo`)
+* ✅ **Disk persistence** — cards & edges saved as JSON files, survive restarts
+* ✅ **Journal layer** — every mutation appended to `journal.jsonl` for audit trail
 
-## Phase 2 – Consolidation Engine
+## Phase 2 – Consolidation Engine ✅
 
-* Replay mechanism
-* Event → Fact upgrade rules
-* Version chain support
-* Conflict detection
+* ✅ Candidate → Active promotion (`Consolidator.PromoteCandidates`)
+* ✅ Supersession chain (superseded cards archived)
+* ✅ Version chain support (each update appends a new version)
+* ✅ Procedural extraction from repeated task runs (`BuildProcedureCandidates`)
+* ✅ **Journal replay** — `ReplayFromJournal()` rebuilds complete state from journal alone (crash recovery)
+* ✅ **Integrity verification** — `VerifyIntegrity()` compares live state vs journal replay
+* ✅ **Event → Fact upgrade** — `UpgradeEventsToFacts()` clusters event cards by topic, creates fact candidates with evidence refs and edges
+* ✅ **Conflict detection** — `DetectConflicts()` finds contradicting fact cards on same topic
 
-## Phase 3 – Governance & Stability
+## Phase 3 – Governance & Stability ✅
 
-* Activation model
-* Decay & compaction
-* Rebuildable projections
-* Soak testing (24h+)
+* ✅ Activation model (score, decay policy: `session_use`/`durable`/`never`)
+* ✅ Decay & compaction (`DecayAndCompact` with configurable thresholds)
+* ✅ **Background governance scheduler** (periodic decay goroutine, auto-started)
+* ✅ **Rebuildable projections** — `RebuildProjections()` wipes snapshots, replays journal, rewrites all files
+* ✅ **Soak test** — 100 cards, 50 edges, 200 updates, 100 touches, decay + rebuild + integrity verified
 
-## Phase 4 – Benchmark Suite
+## Phase 4 – Benchmark Suite ✅
 
-* Temporal correctness benchmark
-* Evidence integrity benchmark
-* Memory contamination benchmark
-* Narrative coherence benchmark
+* ✅ **Temporal correctness** — as-of queries return correct version across validity windows (4/4)
+* ✅ **Version chain integrity** — 20-version chain with prev_version links verified
+* ✅ **Evidence integrity** — all evidence_refs resolve, all edges point to real cards (15/15)
+* ✅ **Memory contamination resistance** — false low-confidence info isolated, majority truth promoted (3/3)
+* ✅ **Narrative coherence** — temporal event chains maintain order, edges form correct DAG (20/20)

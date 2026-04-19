@@ -11,6 +11,7 @@ import (
 
 	"mnemosyneos/internal/airuntime"
 	"mnemosyneos/internal/approval"
+	"mnemosyneos/internal/chat"
 	"mnemosyneos/internal/execution"
 	"mnemosyneos/internal/recall"
 	"mnemosyneos/internal/skills"
@@ -26,9 +27,14 @@ func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 20 * time.Second,
+			Timeout: 120 * time.Second,
 		},
 	}
+}
+
+// Endpoint returns the API base URL this client uses (no trailing slash).
+func (c *Client) Endpoint() string {
+	return c.baseURL
 }
 
 func (c *Client) Health() (map[string]string, error) {
@@ -140,6 +146,61 @@ func (c *Client) Recall(query string, sources []string, limit int) (recall.Respo
 	}
 	var resp recall.Response
 	err := c.do(http.MethodGet, "/recall?"+params.Encode(), nil, &resp)
+	return resp, err
+}
+
+func (c *Client) ChatMessages(sessionID string, limit int) ([]chat.Message, error) {
+	params := url.Values{}
+	if trimmed := strings.TrimSpace(sessionID); trimmed != "" {
+		params.Set("session", trimmed)
+	}
+	path := "/chat/messages"
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var resp struct {
+		Messages []chat.Message `json:"messages"`
+	}
+	if err := c.do(http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	if limit > 0 && len(resp.Messages) > limit {
+		return resp.Messages[len(resp.Messages)-limit:], nil
+	}
+	return resp.Messages, nil
+}
+
+func (c *Client) SendChat(req chat.SendRequest) (chat.SendResponse, error) {
+	var resp chat.SendResponse
+	err := c.do(http.MethodPost, "/chat", req, &resp)
+	return resp, err
+}
+
+type SkillInventory struct {
+	Skills           []skills.Definition     `json:"skills"`
+	ManifestStatuses []skills.ManifestStatus `json:"manifest_statuses,omitempty"`
+	Health           map[string]any          `json:"health,omitempty"`
+	Schema           map[string]any          `json:"schema,omitempty"`
+	Error            string                  `json:"error,omitempty"`
+}
+
+func (c *Client) ListSkills() (SkillInventory, error) {
+	var resp SkillInventory
+	err := c.do(http.MethodGet, "/skills", nil, &resp)
+	return resp, err
+}
+
+func (c *Client) ReloadSkills() (SkillInventory, error) {
+	var resp SkillInventory
+	err := c.do(http.MethodPost, "/skills/reload", map[string]string{}, &resp)
+	return resp, err
+}
+
+func (c *Client) SetSkillEnabled(name string, enabled bool) (SkillInventory, error) {
+	var resp SkillInventory
+	err := c.do(http.MethodPatch, "/skills/"+url.PathEscape(strings.TrimSpace(name)), map[string]bool{
+		"enabled": enabled,
+	}, &resp)
 	return resp, err
 }
 

@@ -3,23 +3,34 @@ package chat
 import "time"
 
 type Message struct {
-	MessageID        string    `json:"message_id"`
-	SessionID        string    `json:"session_id,omitempty"`
-	Role             string    `json:"role"`
-	Content          string    `json:"content"`
-	DialogueAct      string    `json:"dialogue_act,omitempty"`
-	IntentKind       string    `json:"intent_kind,omitempty"`
-	IntentReason     string    `json:"intent_reason,omitempty"`
-	IntentConfidence float64   `json:"intent_confidence,omitempty"`
-	Stage            string    `json:"stage,omitempty"`
-	TaskID           string    `json:"task_id,omitempty"`
-	TaskState        string    `json:"task_state,omitempty"`
-	SelectedSkill    string    `json:"selected_skill,omitempty"`
-	ExecutionProfile string    `json:"execution_profile,omitempty"`
-	Links            []Link    `json:"links,omitempty"`
-	Actions          []Action  `json:"actions,omitempty"`
-	Context          *Context  `json:"context,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
+	MessageID        string           `json:"message_id"`
+	SessionID        string           `json:"session_id,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	DialogueAct      string           `json:"dialogue_act,omitempty"`
+	IntentKind       string           `json:"intent_kind,omitempty"`
+	IntentReason     string           `json:"intent_reason,omitempty"`
+	IntentConfidence float64          `json:"intent_confidence,omitempty"`
+	Stage            string           `json:"stage,omitempty"`
+	TaskID           string           `json:"task_id,omitempty"`
+	TaskState        string           `json:"task_state,omitempty"`
+	SelectedSkill    string           `json:"selected_skill,omitempty"`
+	ExecutionProfile string           `json:"execution_profile,omitempty"`
+	Links            []Link           `json:"links,omitempty"`
+	Actions          []Action         `json:"actions,omitempty"`
+	Context          *Context         `json:"context,omitempty"`
+	ToolTrace        []ToolTraceEntry `json:"tool_trace,omitempty"`
+	CreatedAt        time.Time        `json:"created_at"`
+}
+
+// ToolTraceEntry records one agent-loop tool invocation so the UI can show
+// users exactly what the assistant did instead of trusting the final text
+// blindly. Result is truncated to a preview; full outputs stay in logs.
+type ToolTraceEntry struct {
+	ToolName      string `json:"tool_name"`
+	Arguments     string `json:"arguments,omitempty"`
+	ResultPreview string `json:"result_preview,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type Link struct {
@@ -94,6 +105,10 @@ type SessionWorkset struct {
 	ArtifactPaths []string `json:"artifact_paths,omitempty"`
 	RecallCardIDs []string `json:"recall_card_ids,omitempty"`
 	SourceRefs    []string `json:"source_refs,omitempty"`
+	// FocusPaths holds absolute paths recently surfaced in chat (assistant
+	// replies). Fed into the agent prompt and memoryorchestrator working notes
+	// so follow-ups like “this directory” stay aligned with long-term context.
+	FocusPaths []string `json:"focus_paths,omitempty"`
 }
 
 func (c *Context) isEmpty() bool {

@@ -736,6 +736,11 @@ func (r *Runner) runMemoryConsolidate(task airuntime.Task, onProgress func(Progr
 		if err := r.extractProcedureCandidates(task); err != nil {
 			return RunResult{}, err
 		}
+		if r.model != nil && parseBool(task.Metadata["smart_extract_procedures"]) {
+			if err := r.extractSmartProcedureCandidates(task, onProgress); err != nil {
+				emitProgress(onProgress, "consolidate.smart_procedures", "Smart procedural extraction skipped due to transient model error.")
+			}
+		}
 	}
 	emitProgress(onProgress, "consolidate.replay", "Reviewing candidate memories for promotion...")
 	consolidationResult, err := r.consolidator.PromoteCandidates(memory.ConsolidateRequest{
@@ -809,6 +814,147 @@ func (r *Runner) extractProcedureCandidates(task airuntime.Task) error {
 	})
 	for _, candidate := range candidates {
 		if _, err := r.memoryStore.CreateCard(candidate); err != nil && !errors.Is(err, memory.ErrAlreadyExists) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) extractSmartProcedureCandidates(task airuntime.Task, onProgress func(ProgressEvent)) error {
+	tasks, err := r.runtimeStore.ListTasks()
+	if err != nil {
+		return err
+	}
+	minRuns := parseInt(task.Metadata["min_runs"], 2)
+	if minRuns <= 0 {
+		minRuns = 2
+	}
+	scope := firstNonEmpty(strings.TrimSpace(task.Metadata["scope"]), memoryScopeProject)
+
+	groups := make(map[string][]airuntime.Task)
+	for _, t := range tasks {
+		if t.State != airuntime.TaskStateDone {
+			continue
+		}
+		if strings.TrimSpace(t.Metadata["procedure_steps"]) != "" {
+			continue
+		}
+		taskClass := firstNonEmpty(strings.TrimSpace(t.Metadata["procedure_task_class"]), strings.TrimSpace(t.Metadata["task_class"]))
+		selectedSkill := strings.TrimSpace(t.SelectedSkill)
+		if taskClass == "" || selectedSkill == "" {
+			continue
+		}
+		key := fmt.Sprintf("%s|%s", taskClass, selectedSkill)
+		groups[key] = append(groups[key], t)
+	}
+
+	for key, group := range groups {
+		if len(group) < minRuns {
+			continue
+		}
+		parts := strings.SplitN(key, "|", 2)
+		taskClass := parts[0]
+		selectedSkill := parts[1]
+
+		existing := r.memoryStore.Query(memory.QueryRequest{
+			CardType: "procedure",
+			Scope:    scope,
+		})
+		alreadyExists := false
+		for _, card := range existing.Cards {
+			if fmt.Sprint(card.Content["task_class"]) == taskClass && fmt.Sprint(card.Content["selected_skill"]) == selectedSkill && (card.Status == memory.CardStatusActive || card.Status == memory.CardStatusCandidate) {
+				alreadyExists = true
+				break
+			}
+		}
+		if alreadyExists {
+			continue
+		}
+
+		emitProgress(onProgress, "consolidate.smart_procedures", fmt.Sprintf("Extracting smart procedural template for %s...", taskClass))
+
+		var evidenceBuilder strings.Builder
+		for i, t := range group {
+			if i >= minRuns {
+				break
+			}
+			evidenceBuilder.WriteString(fmt.Sprintf("Run %d:\nTitle: %s\nGoal: %s\n\n", i+1, t.Title, t.Goal))
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		resp, err := r.model.GenerateText(ctx, model.TextRequest{
+			SystemPrompt: "You are the procedural memory extractor of an AgentOS. You extract standard operating procedures (steps, guardrails, success signal) from a series of successful task runs. Return ONLY a valid JSON object matching this schema: {\"summary\": \"...\", \"steps\": \"step1\\nstep2\", \"guardrails\": \"rule1\\nrule2\", \"success_signal\": \"...\"}. Do not wrap in markdown code blocks.",
+			UserPrompt:   fmt.Sprintf("Extract a generalized procedure for task class '%s' using skill '%s' based on these successful runs:\n%s", taskClass, selectedSkill, evidenceBuilder.String()),
+			MaxTokens:    800,
+			Temperature:  0.1,
+			Profile:      model.ProfileSkills,
+		})
+		cancel()
+
+		if err != nil {
+			continue
+		}
+
+		text := strings.TrimSpace(resp.Text)
+		if strings.HasPrefix(text, "```json") {
+			text = strings.TrimPrefix(text, "```json")
+			text = strings.TrimSuffix(text, "```")
+			text = strings.TrimSpace(text)
+		} else if strings.HasPrefix(text, "```") {
+			text = strings.TrimPrefix(text, "```")
+			text = strings.TrimSuffix(text, "```")
+			text = strings.TrimSpace(text)
+		}
+
+		var parsed struct {
+			Summary       string `json:"summary"`
+			Steps         string `json:"steps"`
+			Guardrails    string `json:"guardrails"`
+			SuccessSignal string `json:"success_signal"`
+		}
+		if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+			continue
+		}
+		if strings.TrimSpace(parsed.Steps) == "" {
+			continue
+		}
+
+		signature := fmt.Sprintf("%s|%s|%s|%s", taskClass, selectedSkill, parsed.Steps, parsed.Guardrails)
+		sum := sha1.Sum([]byte(signature))
+
+		sanitizedPrefix := strings.ReplaceAll(taskClass, " ", "_")
+		if len(sanitizedPrefix) == 0 {
+			sanitizedPrefix = "generic"
+		}
+		cardID := fmt.Sprintf("procedure:%s:%x", sanitizedPrefix, sum[:6])
+
+		supportingRuns := make([]string, 0, len(group))
+		for _, t := range group {
+			supportingRuns = append(supportingRuns, t.TaskID)
+		}
+
+		card := memory.CreateCardRequest{
+			CardID:   cardID,
+			CardType: "procedure",
+			Scope:    scope,
+			Status:   memory.CardStatusCandidate,
+			Content: map[string]any{
+				"name":            fmt.Sprintf("%s_smart", sanitizedPrefix),
+				"task_class":      taskClass,
+				"selected_skill":  selectedSkill,
+				"summary":         strings.TrimSpace(parsed.Summary),
+				"steps":           strings.TrimSpace(parsed.Steps),
+				"guardrails":      strings.TrimSpace(parsed.Guardrails),
+				"success_signal":  strings.TrimSpace(parsed.SuccessSignal),
+				"supporting_runs": supportingRuns,
+			},
+			Provenance: memory.Provenance{
+				Source:     "smart-procedure-extractor",
+				Confidence: 0.8,
+			},
+		}
+
+		if _, err := r.memoryStore.CreateCard(card); err != nil && !errors.Is(err, memory.ErrAlreadyExists) {
 			return err
 		}
 	}
@@ -2213,7 +2359,7 @@ func (r *Runner) generateTaskPlan(task airuntime.Task, now time.Time) (string, m
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	resp, err := r.model.GenerateText(ctx, model.TextRequest{
-		SystemPrompt: "You are the planning module of an AgentOS. Write concise, practical markdown plans.",
+		SystemPrompt: "You are the planning module of an AgentOS. Write concise, practical markdown plans. Do not tell the user to approve, sign off, or wait for review of this plan as a separate workflow step — the plan is informational; execution is handled by the runtime.",
 		UserPrompt: fmt.Sprintf(
 			"Create a short markdown task plan.\nTask ID: %s\nTitle: %s\nGoal: %s\nSelected Skill: %s\nTime: %s",
 			task.TaskID,

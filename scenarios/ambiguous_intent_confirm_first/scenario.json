@@ -1,0 +1,31 @@
+{
+  "name": "ambiguous_intent_confirm_first",
+  "description": "Ensure an ambiguous task-like message asks for confirmation before creating a task.",
+  "lane": "smoke",
+  "tags": [
+    "chat",
+    "intent",
+    "ux"
+  ],
+  "steps": [
+    {
+      "id": "ambiguous_request",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "plan this",
+      "confirm_first": true
+    }
+  ],
+  "assertions": [
+    {
+      "type": "assistant_contains",
+      "step": "ambiguous_request",
+      "contains": "confirm"
+    },
+    {
+      "type": "working_pending_question_contains",
+      "session_id": "default",
+      "contains": "confirm"
+    }
+  ]
+}

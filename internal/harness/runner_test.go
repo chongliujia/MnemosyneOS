@@ -24,6 +24,7 @@ func TestRunScenarioFixtures(t *testing.T) {
 		filepath.Join("..", "..", "scenarios", "memory_contamination_recovery"),
 		filepath.Join("..", "..", "scenarios", "memory_feedback_noop_direct_reply"),
 		filepath.Join("..", "..", "scenarios", "memory_usefulness_feedback"),
+		filepath.Join("..", "..", "scenarios", "metrics_runtime_snapshot"),
 		filepath.Join("..", "..", "scenarios", "scheduled_memory_consolidation_after_web_search"),
 		filepath.Join("..", "..", "scenarios", "failed_shell_manual_rerun"),
 		filepath.Join("..", "..", "scenarios", "idempotent_shell_replay"),
@@ -197,6 +198,47 @@ func TestEvaluateMemoryAssertions(t *testing.T) {
 		{Type: AssertProcedureCount, Min: 1},
 		{Type: AssertProcedureContains, Contains: "expense_audit_v1"},
 		{Type: AssertProcedureStepContains, Contains: "validate_policy"},
+	}
+	for _, assertion := range assertions {
+		result := env.evaluateAssertion(assertion)
+		if !result.Passed {
+			t.Fatalf("assertion %s failed unexpectedly: %+v", assertion.Type, result)
+		}
+	}
+}
+
+func TestEvaluateMetricsAssertions(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	env, err := newRuntimeEnv(root, filepath.Join(root, "runtime"), Scenario{Name: "metrics-assertions"})
+	if err != nil {
+		t.Fatalf("newRuntimeEnv returned error: %v", err)
+	}
+
+	report := StepReport{
+		ID:   "fetch_metrics",
+		Type: StepTypeFetchMetrics,
+		Metrics: MetricsSnapshot{
+			TotalTasks:       3,
+			TotalActions:     2,
+			TotalMemoryCards: 4,
+			ActiveSkills:     6,
+			TasksByState:     map[string]int{"done": 1, "failed": 1, "planned": 1},
+			ActionsByStatus:  map[string]int{"completed": 1, "failed": 1},
+			MemoryByStatus:   map[string]int{"active": 2, "candidate": 2},
+		},
+	}
+	env.stepResults["fetch_metrics"] = report
+
+	assertions := []Assertion{
+		{Type: AssertMetricsTotalTasksAtLeast, Step: "fetch_metrics", Min: 3},
+		{Type: AssertMetricsTotalActionsAtLeast, Step: "fetch_metrics", Min: 2},
+		{Type: AssertMetricsTotalMemoryAtLeast, Step: "fetch_metrics", Min: 4},
+		{Type: AssertMetricsActiveSkillsAtLeast, Step: "fetch_metrics", Min: 1},
+		{Type: AssertMetricsTaskStateAtLeast, Step: "fetch_metrics", Field: "failed", Min: 1},
+		{Type: AssertMetricsActionStatusAtLeast, Step: "fetch_metrics", Field: "completed", Min: 1},
+		{Type: AssertMetricsMemoryStatusAtLeast, Step: "fetch_metrics", Field: "active", Min: 1},
 	}
 	for _, assertion := range assertions {
 		result := env.evaluateAssertion(assertion)

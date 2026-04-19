@@ -20,35 +20,60 @@ import (
 )
 
 type Server struct {
-	store         *memory.Store
-	runtimeStore  *airuntime.Store
-	approvalStore *approval.Store
-	chatService   *chat.Service
-	recallService *recall.Service
-	orchestrator  *airuntime.Orchestrator
-	executor      *execution.Executor
-	skillRunner   *skills.Runner
-	modelConfig   *model.ConfigStore
+	store          *memory.Store
+	runtimeStore   *airuntime.Store
+	approvalStore  *approval.Store
+	chatService    *chat.Service
+	recallService  *recall.Service
+	orchestrator   *airuntime.Orchestrator
+	executor       *execution.Executor
+	skillRunner    *skills.Runner
+	modelConfig    *model.ConfigStore
+	modelProfiles  *model.ProfileStore
+	modelLastTests *model.LastTestStore
+	enableWeb      bool
 }
 
 func NewServer(store *memory.Store, runtimeStore *airuntime.Store, approvalStore *approval.Store, chatService *chat.Service, recallService *recall.Service, orchestrator *airuntime.Orchestrator, executor *execution.Executor, skillRunner *skills.Runner, modelConfig *model.ConfigStore) *Server {
+	return NewServerWithOptions(store, runtimeStore, approvalStore, chatService, recallService, orchestrator, executor, skillRunner, modelConfig, ServerOptions{
+		EnableWeb: true,
+	})
+}
+
+type ServerOptions struct {
+	EnableWeb      bool
+	ModelProfiles  *model.ProfileStore
+	ModelLastTests *model.LastTestStore
+}
+
+func NewServerWithOptions(store *memory.Store, runtimeStore *airuntime.Store, approvalStore *approval.Store, chatService *chat.Service, recallService *recall.Service, orchestrator *airuntime.Orchestrator, executor *execution.Executor, skillRunner *skills.Runner, modelConfig *model.ConfigStore, opts ServerOptions) *Server {
+	lastTests := opts.ModelLastTests
+	if lastTests == nil && modelConfig != nil {
+		lastTests = model.NewLastTestStoreBesideConfig(modelConfig.ConfigPath())
+	}
 	return &Server{
-		store:         store,
-		runtimeStore:  runtimeStore,
-		approvalStore: approvalStore,
-		chatService:   chatService,
-		recallService: recallService,
-		orchestrator:  orchestrator,
-		executor:      executor,
-		skillRunner:   skillRunner,
-		modelConfig:   modelConfig,
+		store:          store,
+		runtimeStore:   runtimeStore,
+		approvalStore:  approvalStore,
+		chatService:    chatService,
+		recallService:  recallService,
+		orchestrator:   orchestrator,
+		executor:       executor,
+		skillRunner:    skillRunner,
+		modelConfig:    modelConfig,
+		modelProfiles:  opts.ModelProfiles,
+		modelLastTests: lastTests,
+		enableWeb:      opts.EnableWeb,
 	}
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	s.registerWebRoutes(mux)
+	if s.enableWeb {
+		s.registerWebRoutes(mux)
+	}
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("GET /runtime/state", s.handleRuntimeState)
 	mux.HandleFunc("GET /skills", s.handleListSkills)
 	mux.HandleFunc("GET /skills/schema", s.handleSkillSchema)
@@ -79,6 +104,66 @@ func (s *Server) Routes() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type Metrics struct {
+	TotalTasks               int            `json:"total_tasks"`
+	TasksByState             map[string]int `json:"tasks_by_state"`
+	TotalActions             int            `json:"total_actions"`
+	ActionsByStatus          map[string]int `json:"actions_by_status"`
+	ActionsByFailureCategory map[string]int `json:"actions_by_failure_category"`
+	TotalMemoryCards         int            `json:"total_memory_cards"`
+	MemoryByStatus           map[string]int `json:"memory_by_status"`
+	ActiveSkills             int            `json:"active_skills"`
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	metrics := Metrics{
+		TasksByState:             make(map[string]int),
+		ActionsByStatus:          make(map[string]int),
+		ActionsByFailureCategory: make(map[string]int),
+		MemoryByStatus:           make(map[string]int),
+	}
+
+	if s.runtimeStore != nil {
+		if tasks, err := s.runtimeStore.ListTasks(); err == nil {
+			metrics.TotalTasks = len(tasks)
+			for _, t := range tasks {
+				metrics.TasksByState[t.State]++
+			}
+		}
+	}
+
+	if s.executor != nil {
+		if actions, err := s.executor.ListActions(1000); err == nil {
+			metrics.TotalActions = len(actions)
+			for _, a := range actions {
+				metrics.ActionsByStatus[a.Status]++
+				if a.FailureCategory != "" {
+					metrics.ActionsByFailureCategory[a.FailureCategory]++
+				}
+			}
+		}
+	}
+
+	if s.store != nil {
+		resp := s.store.Query(memory.QueryRequest{})
+		metrics.TotalMemoryCards = len(resp.Cards)
+		for _, c := range resp.Cards {
+			metrics.MemoryByStatus[c.Status]++
+		}
+	}
+
+	if s.skillRunner != nil {
+		skills := s.skillRunner.ListSkills()
+		for _, sk := range skills {
+			if sk.Enabled {
+				metrics.ActiveSkills++
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, metrics)
 }
 
 func (s *Server) handleRuntimeState(w http.ResponseWriter, _ *http.Request) {

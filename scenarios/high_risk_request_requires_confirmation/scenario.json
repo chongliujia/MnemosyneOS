@@ -1,0 +1,32 @@
+{
+  "name": "high_risk_request_requires_confirmation",
+  "description": "Ensure a high-risk edit request asks for confirmation before creating a task.",
+  "lane": "regression",
+  "tags": [
+    "chat",
+    "intent",
+    "ux",
+    "confirmation"
+  ],
+  "steps": [
+    {
+      "id": "edit_request",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "edit README.md",
+      "confirm_first": true
+    }
+  ],
+  "assertions": [
+    {
+      "type": "assistant_contains",
+      "step": "edit_request",
+      "contains": "confirm"
+    },
+    {
+      "type": "working_pending_question_contains",
+      "session_id": "default",
+      "contains": "confirm"
+    }
+  ]
+}

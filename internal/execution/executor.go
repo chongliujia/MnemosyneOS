@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"mnemosyneos/internal/approval"
+	"mnemosyneos/internal/fsaccess"
 )
 
 var (
@@ -59,7 +60,21 @@ func NewExecutorWithApprovals(store *Store, workspaceRoot, rootAuthToken string,
 	}, nil
 }
 
-func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
+func (e *Executor) ExecuteShell(req ShellActionRequest) (record ActionRecord, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic recovered during shell execution: %v", r)
+			record = ActionRecord{
+				Kind:   ActionKindShell,
+				Status: ActionStatusFailed,
+				Error:  err.Error(),
+			}
+		}
+	}()
+	return e.executeShellInner(req)
+}
+
+func (e *Executor) executeShellInner(req ShellActionRequest) (ActionRecord, error) {
 	if strings.TrimSpace(req.Command) == "" {
 		return ActionRecord{}, fmt.Errorf("%w: command is required", ErrExecutionInvalidInput)
 	}
@@ -156,7 +171,21 @@ func (e *Executor) ExecuteShell(req ShellActionRequest) (ActionRecord, error) {
 	return record, nil
 }
 
-func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, error) {
+func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (record ActionRecord, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic recovered during file read execution: %v", r)
+			record = ActionRecord{
+				Kind:   ActionKindFileRead,
+				Status: ActionStatusFailed,
+				Error:  err.Error(),
+			}
+		}
+	}()
+	return e.executeFileReadInner(req)
+}
+
+func (e *Executor) executeFileReadInner(req FileReadActionRequest) (ActionRecord, error) {
 	if strings.TrimSpace(req.Path) == "" {
 		return ActionRecord{}, fmt.Errorf("%w: path is required", ErrExecutionInvalidInput)
 	}
@@ -190,47 +219,87 @@ func (e *Executor) ExecuteFileRead(req FileReadActionRequest) (ActionRecord, err
 	} else if ok {
 		return replayed, nil
 	}
+	maxAttempts := normalizeMaxAttempts(req.MaxAttempts, record.Attempt)
 	if err := e.store.Save(record); err != nil {
 		return ActionRecord{}, err
 	}
 
-	data, readErr := os.ReadFile(path)
-	finishedAt := time.Now().UTC()
-	record.FinishedAt = &finishedAt
-	if readErr != nil {
+	for attempt := record.Attempt; attempt <= maxAttempts; attempt++ {
+		record.Attempt = attempt
+		if attempt > 1 {
+			performBackoff(attempt)
+		}
+		data, readErr := os.ReadFile(path)
+		finishedAt := time.Now().UTC()
+		record.FinishedAt = &finishedAt
+
+		attemptCategory := ""
+		attemptRetryable := false
+		if readErr != nil {
+			attemptCategory = ActionFailureIO
+			attemptRetryable = isRetryableIOError(readErr)
+		}
+
+		record.AttemptHistory = append(record.AttemptHistory, ActionAttempt{
+			Attempt:         attempt,
+			Status:          attemptStatus(readErr),
+			FailureCategory: attemptCategory,
+			Retryable:       attemptRetryable,
+			Error:           errorString(readErr),
+			StartedAt:       record.StartedAt,
+			FinishedAt:      &finishedAt,
+		})
+
+		if readErr == nil {
+			record.Status = ActionStatusCompleted
+			record.Stdout = string(data)
+			record.Retryable = false
+			record.Error = ""
+			record.FailureCategory = ""
+			if err := e.store.Move(record, ActionStatusCompleted); err != nil {
+				return ActionRecord{}, err
+			}
+			return record, nil
+		}
+
 		record.Status = ActionStatusFailed
 		record.Error = readErr.Error()
 		record.FailureCategory = ActionFailureIO
-		record.AttemptHistory = []ActionAttempt{{
-			Attempt:         record.Attempt,
-			Status:          ActionStatusFailed,
-			FailureCategory: ActionFailureIO,
-			Retryable:       false,
-			Error:           readErr.Error(),
-			StartedAt:       record.StartedAt,
-			FinishedAt:      &finishedAt,
-		}}
-		if err := e.store.Move(record, ActionStatusFailed); err != nil {
-			return ActionRecord{}, err
+		record.Retryable = attemptRetryable
+
+		if !attemptRetryable || !shouldRetry(ActionKindFileRead, ActionFailureIO, attempt, maxAttempts) {
+			record.Retryable = false
+			record.AttemptHistory[len(record.AttemptHistory)-1].Retryable = false
+			if err := e.store.Move(record, ActionStatusFailed); err != nil {
+				return ActionRecord{}, err
+			}
+			return record, nil
 		}
-		return record, nil
 	}
 
-	record.Status = ActionStatusCompleted
-	record.Stdout = string(data)
-	record.AttemptHistory = []ActionAttempt{{
-		Attempt:    record.Attempt,
-		Status:     ActionStatusCompleted,
-		StartedAt:  record.StartedAt,
-		FinishedAt: &finishedAt,
-	}}
-	if err := e.store.Move(record, ActionStatusCompleted); err != nil {
+	record.Status = ActionStatusFailed
+	record.Retryable = false
+	if err := e.store.Move(record, ActionStatusFailed); err != nil {
 		return ActionRecord{}, err
 	}
 	return record, nil
 }
 
-func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, error) {
+func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (record ActionRecord, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic recovered during file write execution: %v", r)
+			record = ActionRecord{
+				Kind:   ActionKindFileWrite,
+				Status: ActionStatusFailed,
+				Error:  err.Error(),
+			}
+		}
+	}()
+	return e.executeFileWriteInner(req)
+}
+
+func (e *Executor) executeFileWriteInner(req FileWriteActionRequest) (ActionRecord, error) {
 	if strings.TrimSpace(req.Path) == "" {
 		return ActionRecord{}, fmt.Errorf("%w: path is required", ErrExecutionInvalidInput)
 	}
@@ -265,63 +334,75 @@ func (e *Executor) ExecuteFileWrite(req FileWriteActionRequest) (ActionRecord, e
 	} else if ok {
 		return replayed, nil
 	}
+	maxAttempts := normalizeMaxAttempts(req.MaxAttempts, record.Attempt)
 	if err := e.store.Save(record); err != nil {
 		return ActionRecord{}, err
 	}
 
-	if req.CreateParents {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			record.Status = ActionStatusFailed
-			record.Error = err.Error()
-			record.FailureCategory = ActionFailureIO
-			finishedAt := time.Now().UTC()
-			record.FinishedAt = &finishedAt
-			record.AttemptHistory = []ActionAttempt{{
-				Attempt:         record.Attempt,
-				Status:          ActionStatusFailed,
-				FailureCategory: ActionFailureIO,
-				Retryable:       false,
-				Error:           err.Error(),
-				StartedAt:       record.StartedAt,
-				FinishedAt:      &finishedAt,
-			}}
-			if moveErr := e.store.Move(record, ActionStatusFailed); moveErr != nil {
-				return ActionRecord{}, moveErr
+	for attempt := record.Attempt; attempt <= maxAttempts; attempt++ {
+		record.Attempt = attempt
+		if attempt > 1 {
+			performBackoff(attempt)
+		}
+
+		var writeErr error
+		if req.CreateParents {
+			writeErr = os.MkdirAll(filepath.Dir(path), 0o755)
+		}
+		if writeErr == nil {
+			writeErr = os.WriteFile(path, []byte(req.Content), 0o644)
+		}
+
+		finishedAt := time.Now().UTC()
+		record.FinishedAt = &finishedAt
+
+		attemptCategory := ""
+		attemptRetryable := false
+		if writeErr != nil {
+			attemptCategory = ActionFailureIO
+			attemptRetryable = isRetryableIOError(writeErr)
+		}
+
+		record.AttemptHistory = append(record.AttemptHistory, ActionAttempt{
+			Attempt:         attempt,
+			Status:          attemptStatus(writeErr),
+			FailureCategory: attemptCategory,
+			Retryable:       attemptRetryable,
+			Error:           errorString(writeErr),
+			StartedAt:       record.StartedAt,
+			FinishedAt:      &finishedAt,
+		})
+
+		if writeErr == nil {
+			record.Status = ActionStatusCompleted
+			record.Stdout = fmt.Sprintf("wrote %d bytes", len(req.Content))
+			record.Retryable = false
+			record.Error = ""
+			record.FailureCategory = ""
+			if err := e.store.Move(record, ActionStatusCompleted); err != nil {
+				return ActionRecord{}, err
+			}
+			return record, nil
+		}
+
+		record.Status = ActionStatusFailed
+		record.Error = writeErr.Error()
+		record.FailureCategory = ActionFailureIO
+		record.Retryable = attemptRetryable
+
+		if !attemptRetryable || !shouldRetry(ActionKindFileWrite, ActionFailureIO, attempt, maxAttempts) {
+			record.Retryable = false
+			record.AttemptHistory[len(record.AttemptHistory)-1].Retryable = false
+			if err := e.store.Move(record, ActionStatusFailed); err != nil {
+				return ActionRecord{}, err
 			}
 			return record, nil
 		}
 	}
-	writeErr := os.WriteFile(path, []byte(req.Content), 0o644)
-	finishedAt := time.Now().UTC()
-	record.FinishedAt = &finishedAt
-	if writeErr != nil {
-		record.Status = ActionStatusFailed
-		record.Error = writeErr.Error()
-		record.FailureCategory = ActionFailureIO
-		record.AttemptHistory = []ActionAttempt{{
-			Attempt:         record.Attempt,
-			Status:          ActionStatusFailed,
-			FailureCategory: ActionFailureIO,
-			Retryable:       false,
-			Error:           writeErr.Error(),
-			StartedAt:       record.StartedAt,
-			FinishedAt:      &finishedAt,
-		}}
-		if err := e.store.Move(record, ActionStatusFailed); err != nil {
-			return ActionRecord{}, err
-		}
-		return record, nil
-	}
 
-	record.Status = ActionStatusCompleted
-	record.Stdout = fmt.Sprintf("wrote %d bytes", len(req.Content))
-	record.AttemptHistory = []ActionAttempt{{
-		Attempt:    record.Attempt,
-		Status:     ActionStatusCompleted,
-		StartedAt:  record.StartedAt,
-		FinishedAt: &finishedAt,
-	}}
-	if err := e.store.Move(record, ActionStatusCompleted); err != nil {
+	record.Status = ActionStatusFailed
+	record.Retryable = false
+	if err := e.store.Move(record, ActionStatusFailed); err != nil {
 		return ActionRecord{}, err
 	}
 	return record, nil
@@ -370,28 +451,32 @@ func (e *Executor) resolveWorkdir(workdir string) (string, error) {
 }
 
 func (e *Executor) resolveAllowedPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	var err error
+	path, err = fsaccess.ExpandHomeDir(path)
+	if err != nil {
+		return "", err
+	}
 	var absPath string
 	if filepath.IsAbs(path) {
 		absPath = filepath.Clean(path)
 	} else {
 		absPath = filepath.Join(e.workspaceRoot, path)
 	}
-	absPath, err := filepath.Abs(absPath)
+	absPath, err = filepath.Abs(absPath)
 	if err != nil {
 		return "", err
 	}
-	if isWithin(absPath, e.workspaceRoot) || isWithin(absPath, os.TempDir()) {
-		return absPath, nil
+	runtimeRoot := strings.TrimSpace(os.Getenv("MNEMOSYNE_RUNTIME_ROOT"))
+	if runtimeRoot != "" {
+		if r, err := filepath.Abs(runtimeRoot); err == nil {
+			runtimeRoot = r
+		}
 	}
-	return "", fmt.Errorf("%w: path %q is outside allowed roots", ErrExecutionDenied, absPath)
-}
-
-func isWithin(path, root string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
+	if !fsaccess.IsPathAllowed(absPath, e.workspaceRoot, runtimeRoot) {
+		return "", fmt.Errorf("%w: path %q is outside allowed roots", ErrExecutionDenied, absPath)
 	}
-	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
+	return absPath, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -467,6 +552,30 @@ func shouldRetry(actionKind, failureCategory string, attempt, maxAttempts int) b
 	default:
 		return false
 	}
+}
+
+func isRetryableIOError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+		return false
+	}
+	type timeoutError interface {
+		Timeout() bool
+	}
+	var te timeoutError
+	if errors.As(err, &te) && te.Timeout() {
+		return true
+	}
+	type temporaryError interface {
+		Temporary() bool
+	}
+	var tmp temporaryError
+	if errors.As(err, &tmp) && tmp.Temporary() {
+		return true
+	}
+	return false
 }
 
 func (e *Executor) tryReplay(record ActionRecord, fingerprint string) (ActionRecord, bool, error) {

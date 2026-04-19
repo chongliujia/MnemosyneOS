@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -15,6 +16,11 @@ type ReportDiff struct {
 	HasDiff      bool
 	Lines        []string
 }
+
+var (
+	dynamicEntityIDPattern = regexp.MustCompile(`\b(task|approval|action|browser|session)-[0-9]+\b`)
+	recallDetailsPattern   = regexp.MustCompile(`\brecall (hit|card)\b`)
+)
 
 func LoadRunReport(path string) (RunReport, string, error) {
 	reportPath := strings.TrimSpace(path)
@@ -36,7 +42,53 @@ func LoadRunReport(path string) (RunReport, string, error) {
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return RunReport{}, "", err
 	}
+	report = resolveReportPaths(report, filepath.Dir(reportPath))
 	return report, reportPath, nil
+}
+
+func resolveReportPaths(report RunReport, reportDir string) RunReport {
+	for i := range report.StepReports {
+		report.StepReports[i].ArtifactPaths = resolveReportFileList(report.StepReports[i].ArtifactPaths, reportDir, "artifacts")
+		report.StepReports[i].ObservationPaths = resolveReportFileList(report.StepReports[i].ObservationPaths, reportDir, "observations")
+	}
+	return report
+}
+
+func resolveReportFileList(paths []string, reportDir, kind string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+	out := make([]string, len(paths))
+	for i, path := range paths {
+		out[i] = resolveReportFilePath(path, reportDir, kind)
+	}
+	return out
+}
+
+func resolveReportFilePath(path, reportDir, kind string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return path
+	}
+	if filepath.IsAbs(path) {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+		candidate := filepath.Join(reportDir, kind, filepath.Base(path))
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		return path
+	}
+	candidate := filepath.Join(reportDir, filepath.FromSlash(path))
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	fallback := filepath.Join(reportDir, kind, filepath.Base(path))
+	if _, err := os.Stat(fallback); err == nil {
+		return fallback
+	}
+	return candidate
 }
 
 func DiffReports(left RunReport, leftPath string, right RunReport, rightPath string) ReportDiff {
@@ -101,6 +153,30 @@ func DiffReports(left RunReport, leftPath string, right RunReport, rightPath str
 		if l.SchedulerCandidateCount != r.SchedulerCandidateCount {
 			appendDiff("%s scheduler_candidate_count: %d != %d", prefix, l.SchedulerCandidateCount, r.SchedulerCandidateCount)
 		}
+		if l.Metrics.TotalTasks != r.Metrics.TotalTasks {
+			appendDiff("%s metrics.total_tasks: %d != %d", prefix, l.Metrics.TotalTasks, r.Metrics.TotalTasks)
+		}
+		if l.Metrics.TotalActions != r.Metrics.TotalActions {
+			appendDiff("%s metrics.total_actions: %d != %d", prefix, l.Metrics.TotalActions, r.Metrics.TotalActions)
+		}
+		if l.Metrics.TotalMemoryCards != r.Metrics.TotalMemoryCards {
+			appendDiff("%s metrics.total_memory_cards: %d != %d", prefix, l.Metrics.TotalMemoryCards, r.Metrics.TotalMemoryCards)
+		}
+		if l.Metrics.ActiveSkills != r.Metrics.ActiveSkills {
+			appendDiff("%s metrics.active_skills: %d != %d", prefix, l.Metrics.ActiveSkills, r.Metrics.ActiveSkills)
+		}
+		if !equalStringIntMap(l.Metrics.TasksByState, r.Metrics.TasksByState) {
+			appendDiff("%s metrics.tasks_by_state: %v != %v", prefix, l.Metrics.TasksByState, r.Metrics.TasksByState)
+		}
+		if !equalStringIntMap(l.Metrics.ActionsByStatus, r.Metrics.ActionsByStatus) {
+			appendDiff("%s metrics.actions_by_status: %v != %v", prefix, l.Metrics.ActionsByStatus, r.Metrics.ActionsByStatus)
+		}
+		if !equalStringIntMap(l.Metrics.ActionsByFailureCategory, r.Metrics.ActionsByFailureCategory) {
+			appendDiff("%s metrics.actions_by_failure_category: %v != %v", prefix, l.Metrics.ActionsByFailureCategory, r.Metrics.ActionsByFailureCategory)
+		}
+		if !equalStringIntMap(l.Metrics.MemoryByStatus, r.Metrics.MemoryByStatus) {
+			appendDiff("%s metrics.memory_by_status: %v != %v", prefix, l.Metrics.MemoryByStatus, r.Metrics.MemoryByStatus)
+		}
 		if l.ActionStatus != r.ActionStatus {
 			appendDiff("%s action_status: %q != %q", prefix, l.ActionStatus, r.ActionStatus)
 		}
@@ -110,8 +186,9 @@ func DiffReports(left RunReport, leftPath string, right RunReport, rightPath str
 		if l.ActionReplayed != r.ActionReplayed {
 			appendDiff("%s action_replayed: %t != %t", prefix, l.ActionReplayed, r.ActionReplayed)
 		}
-		if l.ReplayOfActionID != r.ReplayOfActionID {
-			appendDiff("%s replay_of_action_id: %q != %q", prefix, l.ReplayOfActionID, r.ReplayOfActionID)
+		if strings.TrimSpace(l.ReplayOfActionID) == "" && strings.TrimSpace(r.ReplayOfActionID) != "" ||
+			strings.TrimSpace(l.ReplayOfActionID) != "" && strings.TrimSpace(r.ReplayOfActionID) == "" {
+			appendDiff("%s replay_of_action_id presence: %q != %q", prefix, l.ReplayOfActionID, r.ReplayOfActionID)
 		}
 		if l.ActionAttempts != r.ActionAttempts {
 			appendDiff("%s action_attempts: %d != %d", prefix, l.ActionAttempts, r.ActionAttempts)
@@ -162,8 +239,10 @@ func DiffReports(left RunReport, leftPath string, right RunReport, rightPath str
 		if l.Passed != r.Passed {
 			appendDiff("%s passed: %t != %t", prefix, l.Passed, r.Passed)
 		}
-		if l.Details != r.Details {
-			appendDiff("%s details: %q != %q", prefix, l.Details, r.Details)
+		leftDetails := normalizeAssertionDetails(left, l.Details)
+		rightDetails := normalizeAssertionDetails(right, r.Details)
+		if leftDetails != rightDetails {
+			appendDiff("%s details: %q != %q", prefix, leftDetails, rightDetails)
 		}
 	}
 
@@ -171,6 +250,37 @@ func DiffReports(left RunReport, leftPath string, right RunReport, rightPath str
 		diff.Lines = append(diff.Lines, "no differences")
 	}
 	return diff
+}
+
+func normalizeAssertionDetails(report RunReport, details string) string {
+	details = strings.TrimSpace(details)
+	if details == "" {
+		return ""
+	}
+	for _, root := range []string{strings.TrimSpace(report.RuntimeRoot), strings.TrimSpace(report.RunDir)} {
+		if root == "" {
+			continue
+		}
+		details = strings.ReplaceAll(details, root, "<runtime-root>")
+	}
+	details = dynamicEntityIDPattern.ReplaceAllStringFunc(details, func(id string) string {
+		parts := strings.SplitN(id, "-", 2)
+		return parts[0] + "-<id>"
+	})
+	details = recallDetailsPattern.ReplaceAllString(details, "recall result")
+	return details
+}
+
+func equalStringIntMap(left, right map[string]int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func compareArtifactContents(prefix string, left StepReport, leftRoot string, right StepReport, rightRoot string, appendDiff func(format string, args ...any)) {

@@ -138,7 +138,7 @@ func newRuntimeEnv(runDir, runtimeRoot string, scenario Scenario) (*runtimeEnv, 
 	skillRunner := skills.NewRunner(runtimeStore, memoryStore, executor, connectorRuntime, approvalStore, stubModel)
 	recallService := recall.NewService(memoryStore)
 	chatStore := chat.NewStore(runtimeRoot)
-	chatService := chat.NewService(chatStore, orchestrator, runtimeStore, recallService, skillRunner, stubModel)
+	chatService := chat.NewService(chatStore, orchestrator, runtimeStore, recallService, skillRunner, stubModel, memoryStore)
 
 	return &runtimeEnv{
 		runDir:         runDir,
@@ -178,7 +178,7 @@ func (e *runtimeEnv) rebuildServices() error {
 	skillRunner := skills.NewRunner(runtimeStore, memoryStore, executor, connectorRuntime, approvalStore, stubModel)
 	recallService := recall.NewService(memoryStore)
 	chatStore := chat.NewStore(e.runtimeRoot)
-	chatService := chat.NewService(chatStore, orchestrator, runtimeStore, recallService, skillRunner, stubModel)
+	chatService := chat.NewService(chatStore, orchestrator, runtimeStore, recallService, skillRunner, stubModel, memoryStore)
 
 	e.runtimeStore = runtimeStore
 	e.orchestrator = orchestrator
@@ -377,13 +377,33 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 		}
 		return nil
 
+	case StepTypeFetchMetrics:
+		snapshot, err := e.runtimeMetricsSnapshot()
+		if err != nil {
+			return err
+		}
+		report.Metrics = snapshot
+		return nil
+
 	case StepTypeSendChat:
 		beforeCards := latestCardsByID(e.memoryStore)
+		// Default source bypasses the "always confirm before run" gate so
+		// pre-existing single-turn scenarios keep working. Scenarios that
+		// specifically exercise the confirmation UX set confirm_first: true
+		// (or pass an explicit source) to opt into the preview turn.
+		source := step.Source
+		if source == "" {
+			if step.ConfirmFirst {
+				source = "harness"
+			} else {
+				source = "intent-confirmation"
+			}
+		}
 		resp, err := e.chatService.Send(chat.SendRequest{
 			SessionID:        firstNonEmpty(step.SessionID, "default"),
 			Message:          step.Message,
 			RequestedBy:      firstNonEmpty(step.RequestedBy, "harness"),
-			Source:           firstNonEmpty(step.Source, "harness"),
+			Source:           source,
 			ExecutionProfile: firstNonEmpty(step.ExecutionProfile, "user"),
 		})
 		if err != nil {
@@ -473,6 +493,53 @@ func (e *runtimeEnv) executeStep(ctx context.Context, step Step, report *StepRep
 	default:
 		return fmt.Errorf("unsupported step type %q", step.Type)
 	}
+}
+
+func (e *runtimeEnv) runtimeMetricsSnapshot() (MetricsSnapshot, error) {
+	snapshot := MetricsSnapshot{
+		TasksByState:             map[string]int{},
+		ActionsByStatus:          map[string]int{},
+		ActionsByFailureCategory: map[string]int{},
+		MemoryByStatus:           map[string]int{},
+	}
+	if e.runtimeStore != nil {
+		tasks, err := e.runtimeStore.ListTasks()
+		if err != nil {
+			return MetricsSnapshot{}, err
+		}
+		snapshot.TotalTasks = len(tasks)
+		for _, task := range tasks {
+			snapshot.TasksByState[task.State]++
+		}
+	}
+	if e.executor != nil {
+		actions, err := e.executor.ListActions(1000)
+		if err != nil {
+			return MetricsSnapshot{}, err
+		}
+		snapshot.TotalActions = len(actions)
+		for _, action := range actions {
+			snapshot.ActionsByStatus[action.Status]++
+			if strings.TrimSpace(action.FailureCategory) != "" {
+				snapshot.ActionsByFailureCategory[action.FailureCategory]++
+			}
+		}
+	}
+	if e.memoryStore != nil {
+		resp := e.memoryStore.Query(memory.QueryRequest{})
+		snapshot.TotalMemoryCards = len(resp.Cards)
+		for _, card := range resp.Cards {
+			snapshot.MemoryByStatus[card.Status]++
+		}
+	}
+	if e.skillRunner != nil {
+		for _, def := range e.skillRunner.ListSkills() {
+			if def.Enabled {
+				snapshot.ActiveSkills++
+			}
+		}
+	}
+	return snapshot, nil
 }
 
 func seedCardRequestFromMetadata(metadata map[string]string) (memory.CreateCardRequest, error) {
@@ -1170,6 +1237,58 @@ func (e *runtimeEnv) evaluateAssertion(assertion Assertion) AssertionResult {
 			return passAssertion(assertion, fmt.Sprintf("step %s scheduler_skip_reason=%q", assertion.Step, actual))
 		}
 		return failAssertion(assertion, fmt.Sprintf("step %s scheduler_skip_reason=%q expected=%q", assertion.Step, actual, expected))
+
+	case AssertMetricsTotalTasksAtLeast:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		return evaluateCountAssertion(assertion, step.Metrics.TotalTasks, fmt.Sprintf("step %s metrics total_tasks", assertion.Step))
+
+	case AssertMetricsTotalActionsAtLeast:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		return evaluateCountAssertion(assertion, step.Metrics.TotalActions, fmt.Sprintf("step %s metrics total_actions", assertion.Step))
+
+	case AssertMetricsTotalMemoryAtLeast:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		return evaluateCountAssertion(assertion, step.Metrics.TotalMemoryCards, fmt.Sprintf("step %s metrics total_memory_cards", assertion.Step))
+
+	case AssertMetricsActiveSkillsAtLeast:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		return evaluateCountAssertion(assertion, step.Metrics.ActiveSkills, fmt.Sprintf("step %s metrics active_skills", assertion.Step))
+
+	case AssertMetricsTaskStateAtLeast:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		actual := step.Metrics.TasksByState[strings.TrimSpace(assertion.Field)]
+		return evaluateCountAssertion(assertion, actual, fmt.Sprintf("step %s metrics task_state=%s", assertion.Step, firstNonEmpty(assertion.Field, "unknown")))
+
+	case AssertMetricsActionStatusAtLeast:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		actual := step.Metrics.ActionsByStatus[strings.TrimSpace(assertion.Field)]
+		return evaluateCountAssertion(assertion, actual, fmt.Sprintf("step %s metrics action_status=%s", assertion.Step, firstNonEmpty(assertion.Field, "unknown")))
+
+	case AssertMetricsMemoryStatusAtLeast:
+		step := e.stepReport(assertion.Step)
+		if step == nil {
+			return failAssertion(assertion, fmt.Sprintf("step %q not found", assertion.Step))
+		}
+		actual := step.Metrics.MemoryByStatus[strings.TrimSpace(assertion.Field)]
+		return evaluateCountAssertion(assertion, actual, fmt.Sprintf("step %s metrics memory_status=%s", assertion.Step, firstNonEmpty(assertion.Field, "unknown")))
 
 	default:
 		return failAssertion(assertion, fmt.Sprintf("unsupported assertion type %q", assertion.Type))

@@ -69,6 +69,75 @@ func TestExecuteFileWriteAndRead(t *testing.T) {
 	}
 }
 
+func TestExecuteFileReadMissingFileNotRetryable(t *testing.T) {
+	runtimeRoot := tempExecutionRoot(t)
+	workspaceRoot := t.TempDir()
+
+	store := NewStore(runtimeRoot)
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+
+	record, err := executor.ExecuteFileRead(FileReadActionRequest{
+		Path:        "notes/missing.txt",
+		MaxAttempts: 3,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteFileRead returned error: %v", err)
+	}
+	if record.Status != ActionStatusFailed {
+		t.Fatalf("expected failed read, got %s", record.Status)
+	}
+	if record.Retryable {
+		t.Fatalf("expected missing-file read to stay non-retryable")
+	}
+	if len(record.AttemptHistory) != 1 {
+		t.Fatalf("expected one failed read attempt, got %#v", record.AttemptHistory)
+	}
+	if record.AttemptHistory[0].Retryable {
+		t.Fatalf("expected missing-file attempt to stay non-retryable, got %#v", record.AttemptHistory)
+	}
+}
+
+func TestExecuteFileWriteStructuralIOErrorNotRetryable(t *testing.T) {
+	runtimeRoot := tempExecutionRoot(t)
+	workspaceRoot := t.TempDir()
+
+	store := NewStore(runtimeRoot)
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+
+	blockerPath := filepath.Join(workspaceRoot, "blocked")
+	if err := os.WriteFile(blockerPath, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	record, err := executor.ExecuteFileWrite(FileWriteActionRequest{
+		Path:          "blocked/output.txt",
+		Content:       "data",
+		CreateParents: true,
+		MaxAttempts:   3,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteFileWrite returned error: %v", err)
+	}
+	if record.Status != ActionStatusFailed {
+		t.Fatalf("expected failed write, got %s", record.Status)
+	}
+	if record.Retryable {
+		t.Fatalf("expected structural write failure to stay non-retryable")
+	}
+	if len(record.AttemptHistory) != 1 {
+		t.Fatalf("expected one failed write attempt, got %#v", record.AttemptHistory)
+	}
+	if record.AttemptHistory[0].Retryable {
+		t.Fatalf("expected structural write attempt to stay non-retryable, got %#v", record.AttemptHistory)
+	}
+}
+
 func TestExecuteShellAllowedCommand(t *testing.T) {
 	runtimeRoot := tempExecutionRoot(t)
 	workspaceRoot := t.TempDir()
@@ -356,6 +425,68 @@ func TestExecuteShellAllowsRootProfileWithApprovedRequest(t *testing.T) {
 	}
 	if consumed.Status != approval.StatusConsumed {
 		t.Fatalf("expected consumed approval, got %s", consumed.Status)
+	}
+}
+
+func TestExecuteFileReadExtraRootsAllowsPathOutsideWorkspace(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	secretPath := filepath.Join(outside, "extra-root-read.txt")
+	if err := os.WriteFile(secretPath, []byte("extra"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// IsPathAllowed permits os.TempDir() by default. Move TMPDIR to a separate
+	// temp root so this test proves MNEMOSYNE_FILESYSTEM_EXTRA_ROOTS is honored.
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("MNEMOSYNE_FILESYSTEM_EXTRA_ROOTS", outside)
+	t.Setenv("MNEMOSYNE_FILESYSTEM_UNRESTRICTED", "")
+
+	workspaceRoot := t.TempDir()
+	store := NewStore(tempExecutionRoot(t))
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	record, err := executor.ExecuteFileRead(FileReadActionRequest{
+		Path:             secretPath,
+		ExecutionProfile: "user",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteFileRead: %v", err)
+	}
+	if record.Status != ActionStatusCompleted || record.Stdout != "extra" {
+		t.Fatalf("unexpected record: %+v", record)
+	}
+}
+
+func TestExecuteFileReadUnrestrictedAllowsAbsolutePathOutsideWorkspace(t *testing.T) {
+	t.Setenv("MNEMOSYNE_FILESYSTEM_UNRESTRICTED", "1")
+	t.Cleanup(func() { _ = os.Unsetenv("MNEMOSYNE_FILESYSTEM_UNRESTRICTED") })
+
+	workspaceRoot := t.TempDir()
+	outside := t.TempDir()
+	secretPath := filepath.Join(outside, "outside-read.txt")
+	if err := os.WriteFile(secretPath, []byte("xyzzy"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store := NewStore(tempExecutionRoot(t))
+	executor, err := NewExecutor(store, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor: %v", err)
+	}
+	record, err := executor.ExecuteFileRead(FileReadActionRequest{
+		Path:             secretPath,
+		ExecutionProfile: "user",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteFileRead: %v", err)
+	}
+	if record.Status != ActionStatusCompleted || record.Stdout != "xyzzy" {
+		t.Fatalf("unexpected record: %+v", record)
 	}
 }
 

@@ -103,6 +103,9 @@ func heuristicDialogueDecision(message, conversationContext string, state Sessio
 	if text == "" {
 		return DialogueDecision{Act: DialogueActChat, Reason: "empty message", Confidence: 1}, true
 	}
+	if looksLikeListChoiceReply(message) && assistantOfferedEnumeratedChoice(conversationContext) {
+		return DialogueDecision{Act: DialogueActAnswer, Reason: "list choice after assistant enumerated options", Confidence: 0.91}, true
+	}
 	if looksLikeAffirmativeFollowup(text) && strings.TrimSpace(state.PendingQuestion) != "" {
 		return DialogueDecision{Act: DialogueActConfirm, Reason: "affirmative reply to pending question", Confidence: 0.92}, true
 	}

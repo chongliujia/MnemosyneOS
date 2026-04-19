@@ -799,6 +799,70 @@ func TestRunMemoryConsolidateDoesNotRescheduleItself(t *testing.T) {
 	}
 }
 
+func TestRunMemoryConsolidateDoesNotUseSmartExtractionByDefault(t *testing.T) {
+	runtimeRoot := tempSkillRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	execStore := execution.NewStore(runtimeRoot)
+	memoryStore := memory.NewStore()
+	executor, err := execution.NewExecutor(execStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	textModel := &countingTextModel{
+		resp: model.TextResponse{
+			Provider: "test",
+			Model:    "test-model",
+			Text:     `{"summary":"smart summary","steps":"a\nb","guardrails":"g1","success_signal":"done"}`,
+		},
+	}
+	runner := NewRunner(runtimeStore, memoryStore, executor, nil, nil, textModel)
+	orch := airuntime.NewOrchestrator(runtimeStore)
+
+	for i := 0; i < 2; i++ {
+		task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+			Title:         "Plan expense audit",
+			Goal:          "Plan the expense audit work",
+			SelectedSkill: "task-plan",
+			Metadata: map[string]string{
+				"task_class": "expense_audit",
+			},
+		})
+		if err != nil {
+			t.Fatalf("SubmitTask returned error: %v", err)
+		}
+		if _, err := runtimeStore.MoveTask(task.TaskID, airuntime.TaskStateDone, func(t *airuntime.Task) {
+			ensureMetadata(t)
+			t.SelectedSkill = "task-plan"
+			t.Metadata["task_class"] = "expense_audit"
+		}); err != nil {
+			t.Fatalf("MoveTask returned error: %v", err)
+		}
+	}
+
+	task, err := orch.SubmitTask(airuntime.CreateTaskRequest{
+		Title:         "Consolidate expense audit memory",
+		Goal:          "Consolidate procedures",
+		SelectedSkill: "memory-consolidate",
+		Metadata: map[string]string{
+			"extract_procedures": "true",
+			"scope":              memory.ScopeProject,
+			"min_runs":           "2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+
+	if _, err := runner.RunTask(task.TaskID); err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if textModel.generateCalls != 1 {
+		t.Fatalf("expected only the summary generation call without smart extraction, got %d model calls", textModel.generateCalls)
+	}
+}
+
 func TestRunWebSearchCompletesTask(t *testing.T) {
 	runtimeRoot := tempSkillRuntimeRoot(t)
 	workspaceRoot := t.TempDir()
@@ -1488,6 +1552,31 @@ func (f fakeTextModel) StreamText(_ context.Context, _ model.TextRequest, onDelt
 		}
 	}
 	return f.resp, nil
+}
+
+type countingTextModel struct {
+	resp          model.TextResponse
+	err           error
+	generateCalls int
+	streamCalls   int
+}
+
+func (m *countingTextModel) GenerateText(_ context.Context, _ model.TextRequest) (model.TextResponse, error) {
+	m.generateCalls++
+	return m.resp, m.err
+}
+
+func (m *countingTextModel) StreamText(_ context.Context, _ model.TextRequest, onDelta func(model.TextDelta) error) (model.TextResponse, error) {
+	m.streamCalls++
+	if m.err != nil {
+		return model.TextResponse{}, m.err
+	}
+	if onDelta != nil && strings.TrimSpace(m.resp.Text) != "" {
+		if err := onDelta(model.TextDelta{Text: m.resp.Text}); err != nil {
+			return model.TextResponse{}, err
+		}
+	}
+	return m.resp, nil
 }
 
 type fakeSearchClient struct {

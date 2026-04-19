@@ -90,8 +90,6 @@ func (s *Store) DecayAndCompact(opts GovernanceOptions) (GarbageCollectionResult
 			result.Staled++
 		}
 
-		// We only create a new version if there was meaningful decay.
-		// Since rate=0 means decayAmount=0, it won't decay.
 		if newScore < latest.Activation.Score || newStatus != latest.Status {
 			now := opts.Now
 
@@ -100,14 +98,21 @@ func (s *Store) DecayAndCompact(opts GovernanceOptions) (GarbageCollectionResult
 			updated.PrevVersion = latest.CardID + "#v" + fmt.Sprintf("%d", latest.Version)
 			updated.Status = newStatus
 
-			// Update Activation
 			updated.Activation = latest.Activation
 			updated.Activation.Score = newScore
 			updated.Activation.LastEvaluatedAt = &now
 
-			// Append new version
 			s.cards[cardID] = append(versions, updated)
 			result.Decayed++
+
+			if s.persistent() {
+				if err := s.persistCard(cardID); err != nil {
+					return result, err
+				}
+				if err := s.appendCardJournalEvent("decay_applied", cardID, updated.CardType, updated.Version); err != nil {
+					return result, err
+				}
+			}
 		}
 	}
 

@@ -174,21 +174,15 @@ func (o *Orchestrator) RequeueTask(taskID, trigger string, mutate func(*Task)) (
 }
 
 func (o *Orchestrator) planTask(taskID string) (Task, error) {
-	nextState := TaskStatePlanned
-	task, err := o.store.GetTask(taskID)
-	if err != nil {
+	if _, err := o.store.GetTask(taskID); err != nil {
 		return Task{}, err
 	}
-	if task.RequiresApproval {
-		nextState = TaskStateAwaitingApproval
-	}
-	return o.store.MoveTask(taskID, nextState, func(t *Task) {
+	// Always promote inbox → planned without an orchestrator-level “plan approval”
+	// gate. Root / risky work is still gated inside the skill runner (e.g. root
+	// file writes) where real approvals belong.
+	return o.store.MoveTask(taskID, TaskStatePlanned, func(t *Task) {
 		if strings.TrimSpace(t.SelectedSkill) == "" {
 			t.SelectedSkill = suggestSkill(*t)
-		}
-		if t.RequiresApproval {
-			t.NextAction = "awaiting approval"
-			return
 		}
 		t.NextAction = "ready for execution"
 	})
@@ -232,9 +226,11 @@ func suggestSkill(task Task) string {
 		return "shell-command"
 	case containsWord(task.Goal, "memory"), containsWord(task.Goal, "recall"):
 		return "memory-consolidate"
+	case looksLikeCreateDirectoryRequest(task.Goal):
+		return "shell-command"
 	case containsWord(task.Goal, "read") && referencesFileObject(task.Goal):
 		return "file-read"
-	case referencesFileObject(task.Goal) && (containsWord(task.Goal, "edit") || containsWord(task.Goal, "write") || containsWord(task.Goal, "update")):
+	case referencesFileObject(task.Goal) && (containsWord(task.Goal, "edit") || containsWord(task.Goal, "write") || containsWord(task.Goal, "update") || containsAny(task.Goal, "创建", "新建", "生成")):
 		return "file-edit"
 	default:
 		return "task-plan"
@@ -259,7 +255,23 @@ func referencesFileObject(text string) bool {
 		containsWord(text, "document") ||
 		containsWord(text, "doc") ||
 		containsWord(text, "readme") ||
-		containsWord(text, "note")
+		containsWord(text, "note") ||
+		strings.Contains(text, "文件") ||
+		strings.Contains(text, "文档") ||
+		strings.Contains(text, "笔记")
+}
+
+// looksLikeCreateDirectoryRequest matches Chinese/short phrases for making a
+// folder (not creating a file inside a path that happens to contain "目录").
+func looksLikeCreateDirectoryRequest(goal string) bool {
+	goal = strings.TrimSpace(goal)
+	if strings.Contains(goal, "文件") {
+		return false
+	}
+	if !strings.Contains(goal, "目录") && !strings.Contains(goal, "文件夹") {
+		return false
+	}
+	return containsAny(goal, "创建", "新建", "建立")
 }
 
 func incrementStringCounter(raw string) string {

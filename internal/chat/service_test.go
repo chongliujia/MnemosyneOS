@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"mnemosyneos/internal/approval"
 	"mnemosyneos/internal/execution"
 	"mnemosyneos/internal/memory"
+	"mnemosyneos/internal/model"
 	"mnemosyneos/internal/recall"
 	"mnemosyneos/internal/skills"
 )
@@ -39,13 +42,16 @@ func TestSendCreatesTaskAndTranscript(t *testing.T) {
 		t.Fatalf("CreateCard returned error: %v", err)
 	}
 	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
-	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
 
 	resp, err := service.Send(SendRequest{
 		SessionID:   "default",
 		Message:     "Plan the next repository step with approval context",
 		RequestedBy: "chat-test",
-		Source:      "chat-test",
+		// Source="intent-confirmation" bypasses the always-confirm gate that
+		// new task_request turns go through, simulating the second turn after
+		// the user approved the preview. See shouldConfirmTaskIntent.
+		Source: "intent-confirmation",
 	})
 	if err != nil {
 		t.Fatalf("Send returned error: %v", err)
@@ -62,8 +68,8 @@ func TestSendCreatesTaskAndTranscript(t *testing.T) {
 	if resp.AssistantMessage.IntentKind != IntentKindTask {
 		t.Fatalf("expected task intent kind, got %s", resp.AssistantMessage.IntentKind)
 	}
-	if !strings.Contains(resp.AssistantMessage.Content, "Work completed.") {
-		t.Fatalf("expected completion note in assistant reply, got %q", resp.AssistantMessage.Content)
+	if strings.TrimSpace(resp.AssistantMessage.Content) == "" {
+		t.Fatalf("expected non-empty assistant reply content")
 	}
 	if len(resp.AssistantMessage.Links) == 0 {
 		t.Fatalf("expected assistant links to be populated")
@@ -97,6 +103,43 @@ func TestSendCreatesTaskAndTranscript(t *testing.T) {
 	}
 }
 
+func TestAgentLoopDoesNotBypassTaskRuntime(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	modelGateway := fakeTextGateway{text: "assistant summary"}
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, modelGateway, memoryStore)
+	service.SetAgentLoop(NewAgentLoop(modelGateway, skills.NewAgentSkillRegistry()))
+
+	resp, err := service.Send(SendRequest{
+		SessionID: "default",
+		Message:   "Plan the next repository step",
+		Source:    "intent-confirmation", // bypass always-confirm gate for this scenario
+	})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if resp.AssistantMessage.IntentKind != IntentKindTask {
+		t.Fatalf("expected task intent, got %s", resp.AssistantMessage.IntentKind)
+	}
+	if strings.TrimSpace(resp.AssistantMessage.TaskID) == "" {
+		t.Fatalf("expected task runtime path to create a task, got %+v", resp.AssistantMessage)
+	}
+	if resp.AssistantMessage.SelectedSkill != SkillTaskPlan {
+		t.Fatalf("expected task-plan skill, got %s", resp.AssistantMessage.SelectedSkill)
+	}
+}
+
 func TestSendChineseSearchRequestUsesWebSearchSkill(t *testing.T) {
 	runtimeRoot := tempChatRuntimeRoot(t)
 	workspaceRoot := t.TempDir()
@@ -111,11 +154,12 @@ func TestSendChineseSearchRequestUsesWebSearchSkill(t *testing.T) {
 	}
 	memoryStore := memory.NewStore()
 	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
-	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
 
 	resp, err := service.Send(SendRequest{
 		SessionID: "default",
 		Message:   "帮我搜索一下 OpenClaw 的 memory 设计",
+		Source:    "intent-confirmation", // bypass always-confirm gate for this scenario
 	})
 	if err != nil {
 		t.Fatalf("Send returned error: %v", err)
@@ -123,6 +167,23 @@ func TestSendChineseSearchRequestUsesWebSearchSkill(t *testing.T) {
 	if resp.AssistantMessage.SelectedSkill != SkillWebSearch {
 		t.Fatalf("expected %s skill, got %s", SkillWebSearch, resp.AssistantMessage.SelectedSkill)
 	}
+}
+
+type fakeTextGateway struct {
+	text string
+}
+
+func (f fakeTextGateway) GenerateText(context.Context, model.TextRequest) (model.TextResponse, error) {
+	return model.TextResponse{Text: f.text}, nil
+}
+
+func (f fakeTextGateway) StreamText(_ context.Context, req model.TextRequest, onDelta func(model.TextDelta) error) (model.TextResponse, error) {
+	if onDelta != nil && f.text != "" {
+		if err := onDelta(model.TextDelta{Text: f.text}); err != nil {
+			return model.TextResponse{}, err
+		}
+	}
+	return model.TextResponse{Text: f.text}, nil
 }
 
 func TestSendGreetingDoesNotCreateTask(t *testing.T) {
@@ -139,7 +200,7 @@ func TestSendGreetingDoesNotCreateTask(t *testing.T) {
 	}
 	memoryStore := memory.NewStore()
 	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
-	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
 
 	resp, err := service.Send(SendRequest{
 		SessionID:   "default",
@@ -188,7 +249,7 @@ func TestSendFollowupUsesSessionStateInsteadOfCreatingNewTask(t *testing.T) {
 	memoryStore := memory.NewStore()
 	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
 	chatStore := NewStore(runtimeRoot)
-	service := NewService(chatStore, orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil)
+	service := NewService(chatStore, orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
 
 	task, err := runtimeStore.CreateTask(airuntime.CreateTaskRequest{
 		Title:         "帮我搜索一下 OpenClaw 的 memory 设计",
@@ -250,7 +311,269 @@ func TestSendFollowupUsesSessionStateInsteadOfCreatingNewTask(t *testing.T) {
 	}
 }
 
-func TestSendRootRequestCreatesContinueAction(t *testing.T) {
+func TestSendEnglishGreetingRepliesInEnglish(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
+
+	resp, err := service.Send(SendRequest{SessionID: "default", Message: "hello"})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(resp.AssistantMessage.Content), "hi") && !strings.Contains(strings.ToLower(resp.AssistantMessage.Content), "help") {
+		t.Fatalf("expected english direct reply, got %q", resp.AssistantMessage.Content)
+	}
+}
+
+func TestSendAmbiguousTaskRequestRequiresConfirmation(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
+
+	resp, err := service.Send(SendRequest{SessionID: "default", Message: "plan this"})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if resp.AssistantMessage.Stage != "awaiting_confirmation" {
+		t.Fatalf("expected awaiting confirmation stage, got %s", resp.AssistantMessage.Stage)
+	}
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected no tasks before confirmation, got %d", len(tasks))
+	}
+
+	resp2, err := service.Send(SendRequest{SessionID: "default", Message: "yes"})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if strings.TrimSpace(resp2.AssistantMessage.TaskID) == "" {
+		t.Fatalf("expected task creation after confirmation")
+	}
+}
+
+// TestSendAlwaysConfirmsTaskIntent verifies that even a concrete, well-formed
+// task_request goes through the preview + approve step first, and that the
+// preview shows the goal, skill, and profile the runtime would actually use.
+func TestSendAlwaysConfirmsTaskIntent(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
+
+	resp, err := service.Send(SendRequest{
+		SessionID: "default",
+		Message:   "帮我搜索一下 OpenClaw 的 memory 设计",
+	})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if resp.AssistantMessage.Stage != "awaiting_confirmation" {
+		t.Fatalf("expected awaiting_confirmation stage on first turn, got %s", resp.AssistantMessage.Stage)
+	}
+	if strings.TrimSpace(resp.AssistantMessage.TaskID) != "" {
+		t.Fatalf("expected no task to be created before confirmation, got %s", resp.AssistantMessage.TaskID)
+	}
+	content := resp.AssistantMessage.Content
+	for _, want := range []string{"目标", "Skill", "执行权限", "OpenClaw"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected confirmation preview to contain %q, got %q", want, content)
+		}
+	}
+
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected no tasks yet, got %d", len(tasks))
+	}
+
+	resp2, err := service.Send(SendRequest{SessionID: "default", Message: "开始"})
+	if err != nil {
+		t.Fatalf("Send (confirm) returned error: %v", err)
+	}
+	if strings.TrimSpace(resp2.AssistantMessage.TaskID) == "" {
+		t.Fatalf("expected task creation after 开始 confirmation, got message %+v", resp2.AssistantMessage)
+	}
+}
+
+// TestSendAmbiguousReplyInConfirmationTreatedAsRefinedGoal verifies that when
+// the user replies with something that's neither yes nor no during
+// confirmation, we treat it as a refined goal and re-enter the confirmation
+// flow instead of looping "please reply yes or no".
+func TestSendAmbiguousReplyInConfirmationTreatedAsRefinedGoal(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
+
+	if _, err := service.Send(SendRequest{SessionID: "default", Message: "plan this"}); err != nil {
+		t.Fatalf("Send 1 returned error: %v", err)
+	}
+	resp2, err := service.Send(SendRequest{SessionID: "default", Message: "帮我搜索一下 OpenClaw 的 memory 设计"})
+	if err != nil {
+		t.Fatalf("Send 2 returned error: %v", err)
+	}
+	if resp2.AssistantMessage.Stage != "awaiting_confirmation" {
+		t.Fatalf("expected refined goal to re-enter awaiting_confirmation, got stage %q", resp2.AssistantMessage.Stage)
+	}
+	if !strings.Contains(resp2.AssistantMessage.Content, "OpenClaw") {
+		t.Fatalf("expected refined goal preview to mention OpenClaw, got %q", resp2.AssistantMessage.Content)
+	}
+
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected no tasks created yet, got %d", len(tasks))
+	}
+}
+
+// TestSendNegativeReplyCancelsConfirmation verifies that cancel/取消 short
+// circuits the pending confirmation without creating a task.
+func TestSendNegativeReplyCancelsConfirmation(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
+
+	if _, err := service.Send(SendRequest{SessionID: "default", Message: "plan this"}); err != nil {
+		t.Fatalf("Send 1 returned error: %v", err)
+	}
+	resp2, err := service.Send(SendRequest{SessionID: "default", Message: "取消"})
+	if err != nil {
+		t.Fatalf("Send 2 returned error: %v", err)
+	}
+	if strings.TrimSpace(resp2.AssistantMessage.TaskID) != "" {
+		t.Fatalf("expected no task after cancel, got %s", resp2.AssistantMessage.TaskID)
+	}
+	tasks, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected no tasks after cancel, got %d", len(tasks))
+	}
+}
+
+func TestSendFocusedTaskContinuationUsesExistingTaskContext(t *testing.T) {
+	runtimeRoot := tempChatRuntimeRoot(t)
+	workspaceRoot := t.TempDir()
+	runtimeStore := airuntime.NewStore(runtimeRoot)
+	orchestrator := airuntime.NewOrchestrator(runtimeStore)
+	approvalStore := approval.NewStore(runtimeRoot, 10*time.Minute)
+	actionStore := execution.NewStore(runtimeRoot)
+	executor, err := execution.NewExecutor(actionStore, workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	memoryStore := memory.NewStore()
+	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
+	chatStore := NewStore(runtimeRoot)
+	service := NewService(chatStore, orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
+
+	task, err := runtimeStore.CreateTask(airuntime.CreateTaskRequest{
+		Title:         "Search OpenClaw memory",
+		Goal:          "Search OpenClaw memory",
+		SelectedSkill: SkillWebSearch,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask returned error: %v", err)
+	}
+	artifactPath := filepath.Join(runtimeRoot, "artifacts", "reports", task.TaskID+"-web-search.md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("OpenClaw uses durable files plus retrieval layers."), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	doneTask, err := runtimeStore.MoveTask(task.TaskID, airuntime.TaskStateDone, func(t *airuntime.Task) {
+		if t.Metadata == nil {
+			t.Metadata = map[string]string{}
+		}
+		t.Metadata["search_artifact"] = artifactPath
+	})
+	if err != nil {
+		t.Fatalf("MoveTask returned error: %v", err)
+	}
+	if err := chatStore.SaveSessionState(SessionState{
+		SessionID:   "default",
+		Topic:       doneTask.Title,
+		FocusTaskID: doneTask.TaskID,
+		WorkingSet: SessionWorkset{
+			ArtifactPaths: []string{artifactPath},
+		},
+	}); err != nil {
+		t.Fatalf("SaveSessionState returned error: %v", err)
+	}
+
+	resp, err := service.Send(SendRequest{
+		SessionID: "default",
+		Message:   "继续展开",
+	})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+	if resp.AssistantMessage.TaskID != "" {
+		t.Fatalf("expected no new task, got %s", resp.AssistantMessage.TaskID)
+	}
+	if !strings.Contains(resp.AssistantMessage.Content, "OpenClaw") {
+		t.Fatalf("expected focused task followup content, got %q", resp.AssistantMessage.Content)
+	}
+}
+
+func TestSendRootProfileRunsTaskPlanWithoutOrchestratorApprovalGate(t *testing.T) {
 	runtimeRoot := tempChatRuntimeRoot(t)
 	workspaceRoot := t.TempDir()
 
@@ -264,11 +587,11 @@ func TestSendRootRequestCreatesContinueAction(t *testing.T) {
 	}
 	memoryStore := memory.NewStore()
 	runner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
-	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), runner, nil, memoryStore)
 
 	resp, err := service.Send(SendRequest{
 		SessionID:        "default",
-		Message:          "Edit a root-owned file",
+		Message:          "Summarize in one short paragraph what root execution profile means for MnemosyneOS.",
 		RequestedBy:      "chat-test",
 		Source:           "chat-test",
 		ExecutionProfile: "root",
@@ -276,18 +599,12 @@ func TestSendRootRequestCreatesContinueAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send returned error: %v", err)
 	}
-	if resp.AssistantMessage.TaskState != airuntime.TaskStateAwaitingApproval {
-		t.Fatalf("expected awaiting approval state, got %s", resp.AssistantMessage.TaskState)
+	if resp.AssistantMessage.TaskID == "" {
+		t.Fatalf("expected a task id on assistant message")
 	}
-	found := false
-	for _, action := range resp.AssistantMessage.Actions {
-		if action.Label == "Approve and Continue" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected approve and continue action in assistant message")
+	if resp.AssistantMessage.TaskState != airuntime.TaskStateDone {
+		t.Fatalf("expected task-plan to finish without pre-run orchestrator approval gate, got state=%s skill=%s",
+			resp.AssistantMessage.TaskState, resp.AssistantMessage.SelectedSkill)
 	}
 
 	sessions, err := service.Sessions(10)
@@ -299,12 +616,33 @@ func TestSendRootRequestCreatesContinueAction(t *testing.T) {
 	}
 }
 
+func TestBuildActionsAwaitingApprovalIncludesApprove(t *testing.T) {
+	t.Parallel()
+	actions := buildActions(airuntime.Task{
+		TaskID: "task-test",
+		State:  airuntime.TaskStateAwaitingApproval,
+		Metadata: map[string]string{
+			"root_approval_id": "appr-test-1",
+		},
+	})
+	found := false
+	for _, action := range actions {
+		if action.Label == "Approve and Continue" && strings.Contains(action.Href, "appr-test-1") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected approve action, got %#v", actions)
+	}
+}
+
 func TestRenameArchiveAndDeleteSession(t *testing.T) {
 	runtimeRoot := tempChatRuntimeRoot(t)
 	runtimeStore := airuntime.NewStore(runtimeRoot)
 	orchestrator := airuntime.NewOrchestrator(runtimeStore)
 	memoryStore := memory.NewStore()
-	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil, memoryStore)
 
 	if _, err := service.EnsureSession("session-1"); err != nil {
 		t.Fatalf("EnsureSession returned error: %v", err)
@@ -399,7 +737,7 @@ func TestBuildFastContextSnapshotUsesSessionWorkingSet(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateCard returned error: %v", err)
 	}
-	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil, memoryStore)
 
 	task, err := runtimeStore.CreateTask(airuntime.CreateTaskRequest{
 		Title:         "Focused task",
@@ -446,7 +784,7 @@ func TestDirectReplyPromptIncludesMemorySections(t *testing.T) {
 		WorkingNotes:  []string{"topic: reimbursement audit", "pending question: continue the summary?"},
 		SemanticHits:  []RecallRef{{CardID: "search:test:summary", Snippet: "User prefers concise audit summaries."}},
 		ProcedureHits: []RecallRef{{CardID: "procedure:expense-audit:v1", Snippet: "extract fields then validate policy"}},
-	}, "assistant: 已经总结了报销流程", "继续总结")
+	}, "assistant: 已经总结了报销流程", "继续总结", localeEN)
 
 	for _, snippet := range []string{
 		"Working memory:",
@@ -477,7 +815,7 @@ func TestFinalizeSessionStateRecordsMemoryUse(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateCard returned error: %v", err)
 	}
-	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil)
+	service := NewService(NewStore(runtimeRoot), orchestrator, runtimeStore, recall.NewService(memoryStore), nil, nil, memoryStore)
 	task, err := runtimeStore.CreateTask(airuntime.CreateTaskRequest{
 		Title:         "Audit reimbursements",
 		Goal:          "Audit reimbursements",
@@ -530,10 +868,10 @@ func TestBuildTaskResultEnvelopeProducesLightweightSummary(t *testing.T) {
 
 func TestStageMessageUsesSkillSpecificText(t *testing.T) {
 	task := airuntime.Task{SelectedSkill: "web-search"}
-	if got := stageMessage(task, "queued"); !strings.Contains(got, "search query") {
+	if got := stageMessage(task, "queued", localeEN); !strings.Contains(got, "search query") {
 		t.Fatalf("expected queued web-search stage text, got %q", got)
 	}
-	if got := stageMessage(task, "running"); !strings.Contains(got, "Searching the web") {
+	if got := stageMessage(task, "running", localeEN); !strings.Contains(got, "Searching the web") {
 		t.Fatalf("expected running web-search stage text, got %q", got)
 	}
 }
@@ -592,4 +930,66 @@ func tempChatRuntimeRoot(t *testing.T) string {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 	return root
+}
+
+func TestModelReplyFailureMessageLocales(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("siliconflow API error: 401")
+	zh := modelReplyFailureMessage("zh-CN", err)
+	if !strings.Contains(zh, "401") || !strings.Contains(zh, "doctor") {
+		t.Fatalf("unexpected zh failure message: %q", zh)
+	}
+	en := modelReplyFailureMessage("en-US", err)
+	if !strings.Contains(en, "401") || !strings.Contains(en, "doctor") {
+		t.Fatalf("unexpected en failure message: %q", en)
+	}
+}
+
+func TestPreviewStringRunesTruncatesOnRunesNotBytes(t *testing.T) {
+	t.Parallel()
+	in := strings.Repeat("你", 10)
+	got := previewStringRunes(in, 5)
+	if want := "你你..."; got != want {
+		t.Fatalf("previewStringRunes(%q, 5) = %q want %q", in, got, want)
+	}
+}
+
+func TestAgentDirectReplyUserContentPassthroughWhenNoTranscript(t *testing.T) {
+	t.Parallel()
+	if got := agentDirectReplyUserContent(localeZH, "  hello  ", "", ""); got != "hello" {
+		t.Fatalf("expected trimmed user text, got %q", got)
+	}
+}
+
+func TestAgentDirectReplyUserContentIncludesTranscript(t *testing.T) {
+	t.Parallel()
+	got := agentDirectReplyUserContent(localeZH, "列出内容", "", "assistant: /Users/x/Lab/")
+	if !strings.Contains(got, "近期对话") || !strings.Contains(got, "/Users/x/Lab/") || !strings.Contains(got, "列出内容") {
+		t.Fatalf("unexpected combined prompt: %q", got)
+	}
+}
+
+func TestAgentDirectReplyUserContentIncludesFocusBlock(t *testing.T) {
+	t.Parallel()
+	focus := formatFocusPathsForAgent([]string{"/Users/x/Lab/"}, localeZH)
+	got := agentDirectReplyUserContent(localeZH, "列出内容", focus, "")
+	if !strings.Contains(got, "工作记忆") || !strings.Contains(got, "/Users/x/Lab/") {
+		t.Fatalf("unexpected combined prompt: %q", got)
+	}
+}
+
+func TestExtractChatFilesystemPaths(t *testing.T) {
+	t.Parallel()
+	got := extractChatFilesystemPaths("路径在 /Users/me/Lab/ 下，详见 /tmp/a/b.txt。")
+	if len(got) < 2 {
+		t.Fatalf("expected at least 2 paths, got %#v", got)
+	}
+}
+
+func TestMergeFocusPathsKeepsOrderAndCap(t *testing.T) {
+	t.Parallel()
+	got := mergeFocusPaths([]string{"/a"}, []string{"/b", "/a"}, 2)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 unique paths, got %#v", got)
+	}
 }

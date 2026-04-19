@@ -40,7 +40,7 @@ func TestSubmitTaskActivatesRunnableTask(t *testing.T) {
 	}
 }
 
-func TestSubmitTaskLeavesApprovalTasksWaiting(t *testing.T) {
+func TestSubmitTaskRootRequiresApprovalStillActivatesWithoutPlanGate(t *testing.T) {
 	root := tempRuntimeRoot(t)
 	store := NewStore(root)
 	orch := NewOrchestrator(store)
@@ -54,8 +54,8 @@ func TestSubmitTaskLeavesApprovalTasksWaiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitTask returned error: %v", err)
 	}
-	if task.State != TaskStateAwaitingApproval {
-		t.Fatalf("expected awaiting approval, got %s", task.State)
+	if task.State != TaskStateActive {
+		t.Fatalf("expected active task (no orchestrator plan-approval pause), got %s", task.State)
 	}
 	if task.SelectedSkill != "web-search" {
 		t.Fatalf("expected web-search skill, got %s", task.SelectedSkill)
@@ -65,8 +65,42 @@ func TestSubmitTaskLeavesApprovalTasksWaiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState returned error: %v", err)
 	}
-	if state.ActiveTaskID != nil {
-		t.Fatalf("expected no active task, got %#v", state.ActiveTaskID)
+	if state.ActiveTaskID == nil || *state.ActiveTaskID != task.TaskID {
+		t.Fatalf("expected active task id %s, got %#v", task.TaskID, state.ActiveTaskID)
+	}
+}
+
+func TestSubmitTaskChineseCreateFileSelectsFileEdit(t *testing.T) {
+	root := tempRuntimeRoot(t)
+	store := NewStore(root)
+	orch := NewOrchestrator(store)
+
+	task, err := orch.SubmitTask(CreateTaskRequest{
+		Title: "创建文件",
+		Goal:  "在 lab 目录里创建一个名为 test.txt 的文件",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask: %v", err)
+	}
+	if task.SelectedSkill != "file-edit" {
+		t.Fatalf("expected file-edit for Chinese create-file goal, got %q", task.SelectedSkill)
+	}
+}
+
+func TestSubmitTaskChineseCreateDirectorySelectsShellCommand(t *testing.T) {
+	root := tempRuntimeRoot(t)
+	store := NewStore(root)
+	orch := NewOrchestrator(store)
+
+	task, err := orch.SubmitTask(CreateTaskRequest{
+		Title: "创建目录",
+		Goal:  "在 lab 里创建一个名为 testLab 的目录",
+	})
+	if err != nil {
+		t.Fatalf("SubmitTask: %v", err)
+	}
+	if task.SelectedSkill != "shell-command" {
+		t.Fatalf("expected shell-command for Chinese create-directory goal, got %q", task.SelectedSkill)
 	}
 }
 

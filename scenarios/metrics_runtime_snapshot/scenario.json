@@ -1,0 +1,87 @@
+{
+  "name": "metrics_runtime_snapshot",
+  "description": "Capture a runtime metrics snapshot after execution and memory writes, then assert the snapshot is visible to harness, rollup, and baseline diff.",
+  "tags": [
+    "observability",
+    "metrics"
+  ],
+  "steps": [
+    {
+      "id": "seed_metric_card",
+      "type": "seed_memory_card",
+      "metadata": {
+        "card_id": "metrics:web:1",
+        "card_type": "web_result",
+        "scope": "project",
+        "status": "active",
+        "content.snippet": "metrics snapshot card"
+      }
+    },
+    {
+      "id": "submit_metric_file_write",
+      "type": "submit_task",
+      "title": "Write metrics file",
+      "goal": "Write a file so execution metrics have a completed action",
+      "selected_skill": "file-edit",
+      "metadata": {
+        "path": "notes/metrics-snapshot.txt",
+        "content": "metrics snapshot\n"
+      }
+    },
+    {
+      "id": "run_metric_file_write",
+      "type": "run_task",
+      "task_ref": "submit_metric_file_write"
+    },
+    {
+      "id": "fetch_metrics",
+      "type": "fetch_metrics"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "task_state",
+      "step": "run_metric_file_write",
+      "equals": "done"
+    },
+    {
+      "type": "metrics_total_tasks_at_least",
+      "step": "fetch_metrics",
+      "min": 1
+    },
+    {
+      "type": "metrics_total_actions_at_least",
+      "step": "fetch_metrics",
+      "min": 1
+    },
+    {
+      "type": "metrics_total_memory_cards_at_least",
+      "step": "fetch_metrics",
+      "min": 1
+    },
+    {
+      "type": "metrics_active_skills_at_least",
+      "step": "fetch_metrics",
+      "min": 1
+    },
+    {
+      "type": "metrics_task_state_at_least",
+      "step": "fetch_metrics",
+      "field": "done",
+      "min": 1
+    },
+    {
+      "type": "metrics_action_status_at_least",
+      "step": "fetch_metrics",
+      "field": "completed",
+      "min": 1
+    },
+    {
+      "type": "metrics_memory_status_at_least",
+      "step": "fetch_metrics",
+      "field": "active",
+      "min": 1
+    }
+  ],
+  "lane": "smoke"
+}

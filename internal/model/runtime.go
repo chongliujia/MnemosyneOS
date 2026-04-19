@@ -19,7 +19,8 @@ type completionResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Content json.RawMessage `json:"content"`
+			Content   json.RawMessage `json:"content"`
+			ToolCalls []ToolCall      `json:"tool_calls,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -36,7 +37,8 @@ type streamChunk struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Delta struct {
-			Content json.RawMessage `json:"content"`
+			Content   json.RawMessage       `json:"content"`
+			ToolCalls []streamToolCallDelta `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage struct {
@@ -47,6 +49,17 @@ type streamChunk struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+}
+
+// streamToolCallDelta represents an incremental tool_call chunk in SSE stream.
+type streamToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function"`
 }
 
 const (
@@ -72,9 +85,10 @@ type Config struct {
 }
 
 type ConfigStore struct {
-	path string
-	mu   sync.RWMutex
-	cfg  Config
+	path           string
+	persistSecrets bool
+	mu             sync.RWMutex
+	cfg            Config
 }
 
 type RuntimeGateway struct {
@@ -83,8 +97,13 @@ type RuntimeGateway struct {
 }
 
 func NewConfigStore(runtimeRoot string) (*ConfigStore, error) {
-	path := filepath.Join(runtimeRoot, "model", "config.json")
-	store := &ConfigStore{path: path}
+	return NewConfigStoreAtPath(runtimeRoot, strings.TrimSpace(os.Getenv("MNEMOSYNE_MODEL_CONFIG_PATH")))
+}
+
+func NewConfigStoreAtPath(runtimeRoot, configPath string) (*ConfigStore, error) {
+	explicitPath := strings.TrimSpace(configPath) != ""
+	path := resolveModelConfigPath(runtimeRoot, configPath)
+	store := &ConfigStore{path: path, persistSecrets: explicitPath}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
@@ -93,16 +112,27 @@ func NewConfigStore(runtimeRoot string) (*ConfigStore, error) {
 		if err := json.Unmarshal(raw, &cfg); err != nil {
 			return nil, err
 		}
-		store.cfg = normalizeConfig(cfg)
+		store.cfg = applyModelEnvOverlay(normalizeConfig(cfg))
 		return store, nil
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	store.cfg = normalizeConfig(configFromEnv())
-	if err := store.Save(store.cfg); err != nil {
+	store.cfg = applyModelEnvOverlay(normalizeConfig(configFromEnv()))
+	if err := store.writeConfigFile(store.diskConfig(store.cfg)); err != nil {
 		return nil, err
 	}
 	return store, nil
+}
+
+func resolveModelConfigPath(runtimeRoot, configPath string) string {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return filepath.Join(runtimeRoot, "model", "config.json")
+	}
+	if filepath.IsAbs(configPath) {
+		return configPath
+	}
+	return filepath.Join(runtimeRoot, configPath)
 }
 
 func (s *ConfigStore) Get() Config {
@@ -114,17 +144,32 @@ func (s *ConfigStore) Get() Config {
 	return s.cfg
 }
 
+// ConfigPath returns the absolute filesystem path where Save() will persist
+// the model configuration. Used by the UI to show where API keys are going.
+func (s *ConfigStore) ConfigPath() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
+}
+
+// PersistsSecrets reports whether Save() will include the api_key field on
+// disk. When this is false (the default runtime/model/config.json), writes
+// zero out the key before serialisation. The UI uses this to tell the user
+// whether their key will survive a restart.
+func (s *ConfigStore) PersistsSecrets() bool {
+	if s == nil {
+		return false
+	}
+	return s.persistSecrets
+}
+
 func (s *ConfigStore) Save(cfg Config) error {
 	if s == nil {
 		return fmt.Errorf("model config store is not configured")
 	}
 	cfg = normalizeConfig(cfg)
-	raw, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	raw = append(raw, '\n')
-	if err := os.WriteFile(s.path, raw, 0o600); err != nil {
+	if err := s.writeConfigFile(s.diskConfig(cfg)); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -133,12 +178,27 @@ func (s *ConfigStore) Save(cfg Config) error {
 	return nil
 }
 
+func (s *ConfigStore) writeConfigFile(cfg Config) error {
+	raw, err := json.MarshalIndent(normalizeConfig(cfg), "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	return os.WriteFile(s.path, raw, 0o600)
+}
+
+func (s *ConfigStore) diskConfig(cfg Config) Config {
+	if s != nil && s.persistSecrets {
+		return cfg
+	}
+	cfg.APIKey = ""
+	return cfg
+}
+
 func NewRuntimeGateway(store *ConfigStore) TextGateway {
 	return &RuntimeGateway{
-		store: store,
-		httpClient: &http.Client{
-			Timeout: 45 * time.Second,
-		},
+		store:      store,
+		httpClient: newModelHTTPClient(),
 	}
 }
 
@@ -179,6 +239,44 @@ func (g *RuntimeGateway) TestConfig(ctx context.Context, cfg Config) (TextRespon
 	return g.generateWithProfile(ctx, cfg, profile, resolvedReq)
 }
 
+// TestToolCalls probes whether the configured routing model can emit
+// OpenAI-compatible tool_calls. AgentOS skills and the chat agent loop
+// depend on this capability, so the UI surfaces it as a first-class check.
+//
+// The function succeeds (returns nil error) as long as the upstream API is
+// reachable; callers should inspect TextResponse.ToolCalls to decide whether
+// tool calling is actually supported.
+func (g *RuntimeGateway) TestToolCalls(ctx context.Context, cfg Config) (TextResponse, error) {
+	cfg = normalizeConfig(cfg)
+	if err := validateConfig(cfg); err != nil {
+		return TextResponse{}, err
+	}
+	req := TextRequest{
+		SystemPrompt: "You are a concise assistant. When the user asks about the current time, you MUST call the provided tool instead of replying in plain text.",
+		UserPrompt:   "What is the current UTC time? Please call the tool to get it.",
+		MaxTokens:    120,
+		Temperature:  0,
+		Profile:      ProfileRouting,
+		Tools: []ToolDefinition{{
+			Type: "function",
+			Function: ToolFunction{
+				Name:        "get_current_time",
+				Description: "Return the current UTC time as an ISO-8601 string.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+					"required":   []string{},
+				},
+			},
+		}},
+	}
+	profile, resolvedReq, err := g.resolveRequest(cfg, req)
+	if err != nil {
+		return TextResponse{}, err
+	}
+	return g.generateWithProfile(ctx, cfg, profile, resolvedReq)
+}
+
 func (g *RuntimeGateway) currentConfig() Config {
 	if g == nil || g.store == nil {
 		return Config{}
@@ -208,14 +306,14 @@ func (g *RuntimeGateway) generateWithProfile(ctx context.Context, cfg Config, pr
 		maxTokens = 512
 	}
 	payload := map[string]any{
-		"model": profile.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": req.SystemPrompt},
-			{"role": "user", "content": req.UserPrompt},
-		},
+		"model":       profile.Model,
+		"messages":    buildMessages(req),
 		"stream":      false,
 		"max_tokens":  maxTokens,
 		"temperature": req.Temperature,
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = req.Tools
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -251,13 +349,15 @@ func (g *RuntimeGateway) generateWithProfile(ctx context.Context, cfg Config, pr
 		return TextResponse{}, fmt.Errorf("%s API returned no choices", cfg.Provider)
 	}
 	text := normalizeAssistantTextContent(raw.Choices[0].Message.Content)
-	if strings.TrimSpace(text) == "" {
+	toolCalls := raw.Choices[0].Message.ToolCalls
+	if strings.TrimSpace(text) == "" && len(toolCalls) == 0 {
 		return TextResponse{}, fmt.Errorf("%s API returned an empty message content", cfg.Provider)
 	}
 	return TextResponse{
 		Provider:      cfg.Provider,
 		Model:         firstNonEmpty(raw.Model, profile.Model),
 		Text:          strings.TrimSpace(text),
+		ToolCalls:     toolCalls,
 		InputTokens:   raw.Usage.PromptTokens,
 		OutputTokens:  raw.Usage.CompletionTokens,
 		TotalTokens:   raw.Usage.TotalTokens,
@@ -271,14 +371,14 @@ func (g *RuntimeGateway) streamWithProfile(ctx context.Context, cfg Config, prof
 		maxTokens = 512
 	}
 	payload := map[string]any{
-		"model": profile.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": req.SystemPrompt},
-			{"role": "user", "content": req.UserPrompt},
-		},
+		"model":       profile.Model,
+		"messages":    buildMessages(req),
 		"stream":      true,
 		"max_tokens":  maxTokens,
 		"temperature": req.Temperature,
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = req.Tools
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -309,14 +409,24 @@ func (g *RuntimeGateway) streamWithProfile(ctx context.Context, cfg Config, prof
 		return TextResponse{}, fmt.Errorf("%s API returned status %d", cfg.Provider, resp.StatusCode)
 	}
 	var (
-		builder strings.Builder
-		modelID string
-		usage   struct {
+		builder   strings.Builder
+		modelID   string
+		toolCalls []ToolCall
+		usage     struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
 		}
 	)
+	// Accumulate streamed tool_calls by index → arguments.
+	type partialTC struct {
+		ID   string
+		Type string
+		Name string
+		Args strings.Builder
+	}
+	var partials []partialTC
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -324,11 +434,11 @@ func (g *RuntimeGateway) streamWithProfile(ctx context.Context, cfg Config, prof
 		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
+		eventData := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if eventData == "[DONE]" {
 			break
 		}
-		chunk, err := decodeStreamChunk([]byte(payload))
+		chunk, err := decodeStreamChunk([]byte(eventData))
 		if err != nil {
 			return TextResponse{}, fmt.Errorf("%s streamed a non-compatible event: %s", cfg.Provider, err.Error())
 		}
@@ -344,7 +454,27 @@ func (g *RuntimeGateway) streamWithProfile(ctx context.Context, cfg Config, prof
 		if len(chunk.Choices) == 0 {
 			continue
 		}
-		delta := normalizeAssistantDeltaContent(chunk.Choices[0].Delta.Content)
+		choice := chunk.Choices[0]
+
+		// Accumulate streamed tool_calls deltas.
+		for _, tc := range choice.Delta.ToolCalls {
+			for tc.Index >= len(partials) {
+				partials = append(partials, partialTC{})
+			}
+			p := &partials[tc.Index]
+			if tc.ID != "" {
+				p.ID = tc.ID
+			}
+			if tc.Type != "" {
+				p.Type = tc.Type
+			}
+			if tc.Function.Name != "" {
+				p.Name = tc.Function.Name
+			}
+			p.Args.WriteString(tc.Function.Arguments)
+		}
+
+		delta := normalizeAssistantDeltaContent(choice.Delta.Content)
 		if strings.TrimSpace(delta) == "" && delta == "" {
 			continue
 		}
@@ -358,19 +488,60 @@ func (g *RuntimeGateway) streamWithProfile(ctx context.Context, cfg Config, prof
 	if err := scanner.Err(); err != nil {
 		return TextResponse{}, err
 	}
+
+	// Finalize accumulated tool_calls.
+	for _, p := range partials {
+		toolCalls = append(toolCalls, ToolCall{
+			ID:   p.ID,
+			Type: firstNonEmpty(p.Type, "function"),
+			Function: ToolCallFunction{
+				Name:      p.Name,
+				Arguments: p.Args.String(),
+			},
+		})
+	}
+
 	text := strings.TrimSpace(builder.String())
-	if text == "" {
+	if text == "" && len(toolCalls) == 0 {
 		return TextResponse{}, fmt.Errorf("%s API returned no streamed content", cfg.Provider)
 	}
 	return TextResponse{
 		Provider:      cfg.Provider,
 		Model:         firstNonEmpty(modelID, profile.Model),
 		Text:          text,
+		ToolCalls:     toolCalls,
 		InputTokens:   usage.PromptTokens,
 		OutputTokens:  usage.CompletionTokens,
 		TotalTokens:   usage.TotalTokens,
 		LatencyMillis: time.Since(started).Milliseconds(),
 	}, nil
+}
+
+// buildMessages converts a TextRequest into the messages array for the API.
+// If req.Messages is set (multi-turn agent loop), it is used directly.
+// Otherwise the legacy system+user pair is built.
+func buildMessages(req TextRequest) []map[string]any {
+	if len(req.Messages) > 0 {
+		msgs := make([]map[string]any, 0, len(req.Messages))
+		for _, m := range req.Messages {
+			entry := map[string]any{"role": m.Role}
+			if m.Content != "" {
+				entry["content"] = m.Content
+			}
+			if len(m.ToolCalls) > 0 {
+				entry["tool_calls"] = m.ToolCalls
+			}
+			if m.ToolCallID != "" {
+				entry["tool_call_id"] = m.ToolCallID
+			}
+			msgs = append(msgs, entry)
+		}
+		return msgs
+	}
+	return []map[string]any{
+		{"role": "system", "content": req.SystemPrompt},
+		{"role": "user", "content": req.UserPrompt},
+	}
 }
 
 func decodeCompletionResponse(raw []byte) (completionResponse, error) {
@@ -569,6 +740,54 @@ func configFromEnv() Config {
 	return normalizeConfig(cfg)
 }
 
+func applyModelEnvOverlay(cfg Config) Config {
+	cfg = normalizeConfig(cfg)
+	envCfg := configFromEnv()
+	if envCfg.Provider != "none" {
+		cfg.Provider = envCfg.Provider
+		cfg.Preset = firstNonEmpty(envCfg.Preset, cfg.Preset)
+		cfg.BaseURL = firstNonEmpty(envCfg.BaseURL, cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(envCfg.APIKey, cfg.APIKey)
+		cfg.Conversation = mergeProfileConfig(cfg.Conversation, envCfg.Conversation)
+		cfg.Routing = mergeProfileConfig(cfg.Routing, envCfg.Routing)
+		cfg.Skills = mergeProfileConfig(cfg.Skills, envCfg.Skills)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "deepseek":
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(os.Getenv("DEEPSEEK_BASE_URL")), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")), cfg.APIKey)
+	case "siliconflow":
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(os.Getenv("SILICONFLOW_BASE_URL")), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(os.Getenv("SILICONFLOW_API_KEY")), cfg.APIKey)
+	case "openai":
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(os.Getenv("OPENAI_API_KEY")), cfg.APIKey)
+	case "openai-compatible":
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(os.Getenv("OPENAI_COMPAT_BASE_URL")), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(os.Getenv("OPENAI_COMPAT_API_KEY")), cfg.APIKey)
+	}
+	if name := strings.TrimSpace(os.Getenv("MNEMOSYNE_MODEL_NAME")); name != "" {
+		cfg.Conversation.Model = name
+		cfg.Routing.Model = name
+		cfg.Skills.Model = name
+	}
+	return normalizeConfig(cfg)
+}
+
+func mergeProfileConfig(base, overlay ProfileConfig) ProfileConfig {
+	if strings.TrimSpace(overlay.Model) != "" {
+		base.Model = strings.TrimSpace(overlay.Model)
+	}
+	if overlay.MaxTokens > 0 {
+		base.MaxTokens = overlay.MaxTokens
+	}
+	if overlay.Temperature > 0 {
+		base.Temperature = overlay.Temperature
+	}
+	return base
+}
+
 func normalizeConfig(cfg Config) Config {
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.Preset = strings.ToLower(strings.TrimSpace(cfg.Preset))
@@ -645,6 +864,12 @@ func applyTemperature(profile string, requested, configured float64) float64 {
 	}
 	return requested
 }
+
+// ValidateConfig checks that a model config is usable for LLM calls.
+func ValidateConfig(cfg Config) error { return validateConfig(cfg) }
+
+// ConfigFromEnv creates a Config seeded from environment variables.
+func ConfigFromEnv() Config { return configFromEnv() }
 
 func validateConfig(cfg Config) error {
 	cfg = normalizeConfig(cfg)

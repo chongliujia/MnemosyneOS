@@ -77,6 +77,7 @@ func TestDiffReportsDetectsRetryFieldChanges(t *testing.T) {
 			Type:                  StepTypeRunTask,
 			ActionStatus:          "completed",
 			ActionFailureCategory: "timeout",
+			ReplayOfActionID:      "action-previous",
 			ActionAttempts:        2,
 			RetryAttempts:         1,
 			RetrySucceeded:        true,
@@ -87,7 +88,7 @@ func TestDiffReportsDetectsRetryFieldChanges(t *testing.T) {
 	right.StepReports[0].ActionStatus = "failed"
 	right.StepReports[0].ActionFailureCategory = "process_exit"
 	right.StepReports[0].ActionReplayed = true
-	right.StepReports[0].ReplayOfActionID = "action-previous"
+	right.StepReports[0].ReplayOfActionID = ""
 	right.StepReports[0].ActionAttempts = 1
 	right.StepReports[0].RetryAttempts = 0
 	right.StepReports[0].RetrySucceeded = false
@@ -100,7 +101,7 @@ func TestDiffReportsDetectsRetryFieldChanges(t *testing.T) {
 		"action_status",
 		"action_failure_category",
 		"action_replayed",
-		"replay_of_action_id",
+		"replay_of_action_id presence",
 		"action_attempts",
 		"retry_attempts",
 		"retry_succeeded",
@@ -116,6 +117,54 @@ func TestDiffReportsDetectsRetryFieldChanges(t *testing.T) {
 		if !found {
 			t.Fatalf("expected diff line containing %q, got %+v", marker, diff.Lines)
 		}
+	}
+}
+
+func TestDiffReportsIgnoresDynamicAssertionPathAndIDDetails(t *testing.T) {
+	t.Parallel()
+
+	left := RunReport{
+		ScenarioName: "file_read_roundtrip",
+		RunDir:       "/tmp/mnemosyne-ci-smoke/20260415T030959Z-file-read-roundtrip",
+		RuntimeRoot:  "/tmp/mnemosyne-ci-smoke/20260415T030959Z-file-read-roundtrip/runtime",
+		Passed:       true,
+		AssertionResults: []AssertionResult{
+			{
+				Type:    AssertArtifactContains,
+				Step:    "run_file_read",
+				Passed:  true,
+				Details: `artifact task-1776222599301525000-file-read.txt contained "verify the deployment window"`,
+			},
+			{
+				Type:    AssertFileContains,
+				Passed:  true,
+				Details: `file /tmp/mnemosyne-ci-smoke/20260415T030959Z-file-read-roundtrip/runtime/workspace/notes/harness-roundtrip.txt contained "notify operators"`,
+			},
+		},
+	}
+	right := RunReport{
+		ScenarioName: "file_read_roundtrip",
+		RunDir:       "/var/folders/gh/db_k76y56yj22mvd44k8n7x40000gn/T/mnemosyne-harness-smoke.e6n1Lc/20260415T031328Z-file-read-roundtrip",
+		RuntimeRoot:  "/var/folders/gh/db_k76y56yj22mvd44k8n7x40000gn/T/mnemosyne-harness-smoke.e6n1Lc/20260415T031328Z-file-read-roundtrip/runtime",
+		Passed:       true,
+		AssertionResults: []AssertionResult{
+			{
+				Type:    AssertArtifactContains,
+				Step:    "run_file_read",
+				Passed:  true,
+				Details: `artifact task-1776222808475151000-file-read.txt contained "verify the deployment window"`,
+			},
+			{
+				Type:    AssertFileContains,
+				Passed:  true,
+				Details: `file /var/folders/gh/db_k76y56yj22mvd44k8n7x40000gn/T/mnemosyne-harness-smoke.e6n1Lc/20260415T031328Z-file-read-roundtrip/runtime/workspace/notes/harness-roundtrip.txt contained "notify operators"`,
+			},
+		},
+	}
+
+	diff := DiffReports(left, "left/report.json", right, "right/report.json")
+	if diff.HasDiff {
+		t.Fatalf("expected diff to ignore dynamic ids and runtime paths, got %+v", diff.Lines)
 	}
 }
 
@@ -147,6 +196,53 @@ func TestDiffReportsDetectsSchedulerFieldChanges(t *testing.T) {
 		"scheduler_triggered",
 		"scheduler_skip_reason",
 		"scheduler_candidate_count",
+	}
+	for _, marker := range expectedMarkers {
+		found := false
+		for _, line := range diff.Lines {
+			if strings.Contains(line, marker) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected diff line containing %q, got %+v", marker, diff.Lines)
+		}
+	}
+}
+
+func TestDiffReportsDetectsMetricsFieldChanges(t *testing.T) {
+	t.Parallel()
+
+	left := RunReport{
+		ScenarioName: "metrics_runtime_snapshot",
+		Passed:       true,
+		StepReports: []StepReport{{
+			ID:   "fetch_metrics",
+			Type: StepTypeFetchMetrics,
+			Metrics: MetricsSnapshot{
+				TotalTasks:       2,
+				TotalActions:     1,
+				TotalMemoryCards: 3,
+				ActiveSkills:     7,
+				TasksByState:     map[string]int{"done": 1, "failed": 1},
+				ActionsByStatus:  map[string]int{"completed": 1},
+				MemoryByStatus:   map[string]int{"active": 2, "candidate": 1},
+			},
+		}},
+	}
+	right := left
+	right.StepReports = append([]StepReport(nil), left.StepReports...)
+	right.StepReports[0].Metrics.TotalTasks = 3
+	right.StepReports[0].Metrics.ActionsByStatus = map[string]int{"completed": 1, "failed": 1}
+
+	diff := DiffReports(left, "left/report.json", right, "right/report.json")
+	if !diff.HasDiff {
+		t.Fatalf("expected diff to detect metrics field changes")
+	}
+	expectedMarkers := []string{
+		"metrics.total_tasks",
+		"metrics.actions_by_status",
 	}
 	for _, marker := range expectedMarkers {
 		found := false

@@ -1,0 +1,16 @@
+{
+  "query": "OpenClaw 的 memory 设计",
+  "provider": "fixture-search",
+  "results": [
+    {
+      "title": "OpenClaw memory architecture",
+      "url": "https://fixtures.local/openclaw/memory-architecture",
+      "snippet": "OpenClaw persists memory to files, then uses BM25 plus vector and hybrid retrieval to recall relevant information."
+    },
+    {
+      "title": "OpenClaw recency ranking",
+      "url": "https://fixtures.local/openclaw/recency-ranking",
+      "snippet": "Temporal decay and recency weighting help the agent prefer newer memories while still keeping older long-term context."
+    }
+  ]
+}

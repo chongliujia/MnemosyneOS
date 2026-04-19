@@ -1,0 +1,43 @@
+{
+  "name": "confirm_then_execute_task",
+  "description": "Ensure the assistant only creates and executes a task after the user confirms an ambiguous request.",
+  "lane": "regression",
+  "tags": [
+    "chat",
+    "intent",
+    "ux"
+  ],
+  "steps": [
+    {
+      "id": "ambiguous_request",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "plan this",
+      "confirm_first": true
+    },
+    {
+      "id": "confirm_request",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "yes",
+      "confirm_first": true
+    }
+  ],
+  "assertions": [
+    {
+      "type": "assistant_contains",
+      "step": "ambiguous_request",
+      "contains": "confirm"
+    },
+    {
+      "type": "task_state",
+      "step": "confirm_request",
+      "equals": "done"
+    },
+    {
+      "type": "selected_skill",
+      "step": "confirm_request",
+      "equals": "task-plan"
+    }
+  ]
+}

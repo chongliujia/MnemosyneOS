@@ -18,6 +18,9 @@ func NewWebSearchAdapter(client websearch.Client) *WebSearchAdapter {
 }
 
 func (a *WebSearchAdapter) Search(ctx context.Context, req SearchRequest) (SearchResponse, error) {
+	if a == nil || a.client == nil {
+		return SearchResponse{}, ErrConnectorUnavailable
+	}
 	resp, err := a.client.Search(ctx, req.Query)
 	if err != nil {
 		return SearchResponse{}, err

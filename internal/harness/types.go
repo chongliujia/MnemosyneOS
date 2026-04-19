@@ -12,6 +12,7 @@ const (
 	StepTypeSeedMemoryCard = "seed_memory_card"
 	StepTypeRequeueTask    = "requeue_task"
 	StepTypeScheduleMemory = "schedule_memory_consolidation"
+	StepTypeFetchMetrics   = "fetch_metrics"
 
 	AssertTaskState           = "task_state"
 	AssertSelectedSkill       = "selected_skill"
@@ -52,6 +53,13 @@ const (
 	AssertRetrySucceeded                 = "retry_succeeded"
 	AssertSchedulerTriggered             = "scheduler_triggered"
 	AssertSchedulerSkipReason            = "scheduler_skip_reason"
+	AssertMetricsTotalTasksAtLeast       = "metrics_total_tasks_at_least"
+	AssertMetricsTotalActionsAtLeast     = "metrics_total_actions_at_least"
+	AssertMetricsTotalMemoryAtLeast      = "metrics_total_memory_cards_at_least"
+	AssertMetricsActiveSkillsAtLeast     = "metrics_active_skills_at_least"
+	AssertMetricsTaskStateAtLeast        = "metrics_task_state_at_least"
+	AssertMetricsActionStatusAtLeast     = "metrics_action_status_at_least"
+	AssertMetricsMemoryStatusAtLeast     = "metrics_memory_status_at_least"
 )
 
 type Scenario struct {
@@ -87,6 +95,12 @@ type Step struct {
 	TaskRef          string            `json:"task_ref,omitempty"`
 	ApprovalRef      string            `json:"approval_ref,omitempty"`
 	ApprovedBy       string            `json:"approved_by,omitempty"`
+	// ConfirmFirst controls whether a send_chat step exercises the chat
+	// service's always-confirm gate. By default (false) the harness injects
+	// Source="intent-confirmation" so the service bypasses the preview and
+	// runs the task in a single turn — matches pre-gate scenario expectations.
+	// Set to true in scenarios that specifically test the confirmation UX.
+	ConfirmFirst bool `json:"confirm_first,omitempty"`
 }
 
 type Assertion struct {
@@ -123,38 +137,50 @@ type RunReport struct {
 }
 
 type StepReport struct {
-	ID                       string         `json:"id"`
-	Type                     string         `json:"type"`
-	SessionID                string         `json:"session_id,omitempty"`
-	TaskID                   string         `json:"task_id,omitempty"`
-	TaskState                string         `json:"task_state,omitempty"`
-	SelectedSkill            string         `json:"selected_skill,omitempty"`
-	ActionID                 string         `json:"action_id,omitempty"`
-	ActionStatus             string         `json:"action_status,omitempty"`
-	ActionFailureCategory    string         `json:"action_failure_category,omitempty"`
-	ActionReplayed           bool           `json:"action_replayed,omitempty"`
-	ReplayOfActionID         string         `json:"replay_of_action_id,omitempty"`
-	ActionAttempts           int            `json:"action_attempts,omitempty"`
-	RetryAttempts            int            `json:"retry_attempts,omitempty"`
-	RetrySucceeded           bool           `json:"retry_succeeded,omitempty"`
-	CardType                 string         `json:"card_type,omitempty"`
-	SchedulerTriggered       bool           `json:"scheduler_triggered,omitempty"`
-	SchedulerSkipReason      string         `json:"scheduler_skip_reason,omitempty"`
-	SchedulerCandidateCount  int            `json:"scheduler_candidate_count,omitempty"`
-	ApprovalID               string         `json:"approval_id,omitempty"`
-	UserContent              string         `json:"user_content,omitempty"`
-	AssistantContent         string         `json:"assistant_content,omitempty"`
-	ArtifactPaths            []string       `json:"artifact_paths,omitempty"`
-	ObservationPaths         []string       `json:"observation_paths,omitempty"`
-	PromotedCount            int            `json:"promoted_count,omitempty"`
-	SupersededCount          int            `json:"superseded_count,omitempty"`
-	ArchivedCount            int            `json:"archived_count,omitempty"`
-	MemoryFeedbackUpdates    int            `json:"memory_feedback_updates,omitempty"`
-	ProcedureFeedbackUpdates int            `json:"procedure_feedback_updates,omitempty"`
-	Progress                 []StepProgress `json:"progress,omitempty"`
-	StartedAt                time.Time      `json:"started_at"`
-	FinishedAt               time.Time      `json:"finished_at"`
-	Error                    string         `json:"error,omitempty"`
+	ID                       string          `json:"id"`
+	Type                     string          `json:"type"`
+	SessionID                string          `json:"session_id,omitempty"`
+	TaskID                   string          `json:"task_id,omitempty"`
+	TaskState                string          `json:"task_state,omitempty"`
+	SelectedSkill            string          `json:"selected_skill,omitempty"`
+	ActionID                 string          `json:"action_id,omitempty"`
+	ActionStatus             string          `json:"action_status,omitempty"`
+	ActionFailureCategory    string          `json:"action_failure_category,omitempty"`
+	ActionReplayed           bool            `json:"action_replayed,omitempty"`
+	ReplayOfActionID         string          `json:"replay_of_action_id,omitempty"`
+	ActionAttempts           int             `json:"action_attempts,omitempty"`
+	RetryAttempts            int             `json:"retry_attempts,omitempty"`
+	RetrySucceeded           bool            `json:"retry_succeeded,omitempty"`
+	CardType                 string          `json:"card_type,omitempty"`
+	SchedulerTriggered       bool            `json:"scheduler_triggered,omitempty"`
+	SchedulerSkipReason      string          `json:"scheduler_skip_reason,omitempty"`
+	SchedulerCandidateCount  int             `json:"scheduler_candidate_count,omitempty"`
+	Metrics                  MetricsSnapshot `json:"metrics,omitempty"`
+	ApprovalID               string          `json:"approval_id,omitempty"`
+	UserContent              string          `json:"user_content,omitempty"`
+	AssistantContent         string          `json:"assistant_content,omitempty"`
+	ArtifactPaths            []string        `json:"artifact_paths,omitempty"`
+	ObservationPaths         []string        `json:"observation_paths,omitempty"`
+	PromotedCount            int             `json:"promoted_count,omitempty"`
+	SupersededCount          int             `json:"superseded_count,omitempty"`
+	ArchivedCount            int             `json:"archived_count,omitempty"`
+	MemoryFeedbackUpdates    int             `json:"memory_feedback_updates,omitempty"`
+	ProcedureFeedbackUpdates int             `json:"procedure_feedback_updates,omitempty"`
+	Progress                 []StepProgress  `json:"progress,omitempty"`
+	StartedAt                time.Time       `json:"started_at"`
+	FinishedAt               time.Time       `json:"finished_at"`
+	Error                    string          `json:"error,omitempty"`
+}
+
+type MetricsSnapshot struct {
+	TotalTasks               int            `json:"total_tasks,omitempty"`
+	TasksByState             map[string]int `json:"tasks_by_state,omitempty"`
+	TotalActions             int            `json:"total_actions,omitempty"`
+	ActionsByStatus          map[string]int `json:"actions_by_status,omitempty"`
+	ActionsByFailureCategory map[string]int `json:"actions_by_failure_category,omitempty"`
+	TotalMemoryCards         int            `json:"total_memory_cards,omitempty"`
+	MemoryByStatus           map[string]int `json:"memory_by_status,omitempty"`
+	ActiveSkills             int            `json:"active_skills,omitempty"`
 }
 
 type StepProgress struct {

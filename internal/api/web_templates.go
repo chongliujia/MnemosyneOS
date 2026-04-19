@@ -512,6 +512,21 @@ const webTemplateHTML = `
     .composer-status.error {
       color: var(--danger);
     }
+    .setup-banner {
+      margin: 16px 24px 0;
+      padding: 16px 18px;
+      border: 1px solid rgba(180,160,80,0.35);
+      border-radius: 14px;
+      background: rgba(180,160,80,0.08);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .setup-banner strong { font-weight: 700; }
+    .setup-banner a {
+      color: var(--accent);
+      text-decoration: underline;
+      font-weight: 600;
+    }
     .chat-error {
       margin: 16px 24px 0;
       padding: 12px 14px;
@@ -824,6 +839,115 @@ const webTemplateHTML = `
     @keyframes pending-sweep {
       100% { transform: translateX(100%); }
     }
+    @keyframes msgFadeIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .message { animation: msgFadeIn 0.32s ease both; }
+    .message:nth-last-child(1) { animation-delay: 0.04s; }
+    .message:nth-last-child(2) { animation-delay: 0s; }
+    .typing-cursor::after {
+      content: "▍";
+      display: inline;
+      animation: cursorBlink 0.6s step-end infinite;
+      color: var(--accent);
+      font-weight: 300;
+    }
+    @keyframes cursorBlink {
+      50% { opacity: 0; }
+    }
+    .message-body pre {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      border-radius: 12px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-family: "IBM Plex Mono", "Fira Code", monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      margin: 10px 0;
+      position: relative;
+    }
+    .message-body pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+    .message-body code {
+      background: rgba(24,32,40,0.07);
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.9em;
+    }
+    .message-body h1, .message-body h2, .message-body h3 {
+      margin: 16px 0 8px;
+      font-family: "IBM Plex Serif", Georgia, serif;
+      line-height: 1.3;
+    }
+    .message-body h1 { font-size: 1.3em; }
+    .message-body h2 { font-size: 1.15em; }
+    .message-body h3 { font-size: 1.05em; }
+    .message-body blockquote {
+      border-left: 3px solid var(--accent);
+      margin: 10px 0;
+      padding: 4px 14px;
+      color: var(--muted);
+    }
+    .message-body hr {
+      border: none;
+      border-top: 1px solid var(--line);
+      margin: 14px 0;
+    }
+    .message-body strong { font-weight: 700; }
+    .message-body em { font-style: italic; }
+    .code-copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px;
+      color: rgba(255,255,255,0.7);
+      font-size: 11px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: background 150ms, color 150ms;
+    }
+    .code-copy-btn:hover { background: rgba(255,255,255,0.22); color: #fff; }
+    .code-copy-btn.copied { background: rgba(22,163,74,0.3); color: #4ade80; }
+    @keyframes spinPulse {
+      0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+    .sending-dots {
+      display: inline-flex;
+      gap: 4px;
+      vertical-align: middle;
+      margin-left: 6px;
+    }
+    .sending-dots span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: spinPulse 1.2s ease-in-out infinite;
+    }
+    .sending-dots span:nth-child(2) { animation-delay: 0.15s; }
+    .sending-dots span:nth-child(3) { animation-delay: 0.3s; }
+    .connection-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4ade80;
+      margin-right: 5px;
+      transition: background 300ms;
+    }
+    .connection-dot.disconnected { background: var(--danger); }
+    .connection-dot.reconnecting { background: var(--accent-2); animation: cursorBlink 1s step-end infinite; }
     .message-meta {
       display: flex;
       flex-wrap: wrap;
@@ -904,6 +1028,175 @@ const webTemplateHTML = `
     }
     .message-footer {
       margin-top: 12px;
+    }
+    .message-section {
+      margin-top: 14px;
+      padding-top: 10px;
+      padding-left: 14px;
+      border-top: 1px dashed rgba(24,32,40,0.09);
+    }
+    .message-section-label {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-family: "IBM Plex Mono", monospace;
+    }
+    .message-task-card {
+      border-top-color: rgba(15,118,110,0.18);
+    }
+    .task-card-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .task-card-row:last-child {
+      margin-bottom: 0;
+    }
+    .task-card-label {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
+      min-width: 40px;
+    }
+    .task-card-id {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 700;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .task-card-id:hover {
+      text-decoration: underline;
+    }
+    .task-card-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(24,32,40,0.06);
+      color: var(--ink);
+      border: 1px solid rgba(24,32,40,0.08);
+    }
+    .task-card-chip.state-done {
+      background: rgba(15,118,110,0.12);
+      border-color: rgba(15,118,110,0.25);
+      color: rgb(10,85,80);
+    }
+    .task-card-chip.state-failed,
+    .task-card-chip.state-blocked {
+      background: rgba(185,28,28,0.10);
+      border-color: rgba(185,28,28,0.25);
+      color: rgb(145,24,24);
+    }
+    .task-card-chip.state-awaiting_approval,
+    .task-card-chip.state-awaiting_confirmation {
+      background: rgba(217,119,6,0.12);
+      border-color: rgba(217,119,6,0.28);
+      color: rgb(140,70,10);
+    }
+    .message-tool-trace {
+      border-top-color: rgba(15,118,110,0.14);
+      background: rgba(15,118,110,0.04);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .tool-trace-row {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 12px;
+      color: var(--ink);
+      margin-top: 6px;
+      padding-bottom: 6px;
+      border-bottom: 1px dotted rgba(15,118,110,0.10);
+    }
+    .tool-trace-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .tool-trace-name {
+      color: rgb(10,85,80);
+      font-weight: 700;
+    }
+    .tool-trace-args {
+      color: var(--muted);
+      margin-left: 6px;
+    }
+    .tool-trace-result {
+      color: rgba(24,32,40,0.78);
+      margin-top: 3px;
+      padding-left: 14px;
+      word-break: break-word;
+    }
+    .tool-trace-error {
+      color: rgb(145,24,24);
+      margin-top: 3px;
+      padding-left: 14px;
+    }
+    .message-diagnostics {
+      margin-top: 12px;
+      padding-top: 8px;
+      border-top: 1px dashed rgba(24,32,40,0.09);
+    }
+    .message-diagnostics > summary {
+      cursor: pointer;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
+      list-style: none;
+      padding: 4px 0;
+    }
+    .message-diagnostics > summary::-webkit-details-marker {
+      display: none;
+    }
+    .message-diagnostics > summary::before {
+      content: "▸ ";
+      color: var(--muted);
+      display: inline-block;
+      transition: transform 0.12s ease;
+    }
+    .message-diagnostics[open] > summary::before {
+      content: "▾ ";
+    }
+    .diagnostics-body {
+      padding: 8px 0 2px 14px;
+      border-left: 2px solid rgba(24,32,40,0.08);
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .diagnostics-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .diagnostics-label {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
+    }
+    .diagnostics-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .diagnostics-muted {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
     }
     .message-links {
       display: flex;
@@ -1404,11 +1697,27 @@ const webTemplateHTML = `
   {{template "header" .}}
     <h1>AgentOS Dashboard</h1>
     <div class="sub">A single operator view for runtime health, current focus, gated work, and the most recent execution signals.</div>
+    {{if .ModelUnconfigured}}
+    <div class="setup-banner" style="margin-bottom:18px;">
+      <strong>Model not configured.</strong>
+      LLM-powered features (chat replies, task routing, skill execution) are not available yet.
+      <a href="/ui/models">Configure a model provider</a> to get started, or run <code>mnemosynectl init --provider &lt;provider&gt; --api-key &lt;key&gt;</code> from the terminal.
+    </div>
+    {{end}}
     <div class="grid four" style="margin-bottom:18px;">
       <div class="card"><h3>Runtime</h3><div class="metric">{{.Runtime.Status}}</div><div class="muted">profile {{.Runtime.ExecutionProfile}}</div></div>
       <div class="card"><h3>Open Tasks</h3><div class="metric">{{.Summary.OpenTasks}}</div><div class="muted">inbox, planned, active, blocked, or awaiting approval</div></div>
       <div class="card"><h3>Pending Approvals</h3><div class="metric">{{.Summary.PendingApprovals}}</div><div class="muted">gated actions waiting for an operator</div></div>
       <div class="card"><h3>Failed Actions</h3><div class="metric">{{.Summary.FailedActions}}</div><div class="muted">recent execution records with failure status</div></div>
+    </div>
+    <div class="card" style="margin-bottom:18px;">
+      <h2>System Metrics <span class="muted" style="font-size:0.85rem;font-weight:normal;">/metrics API</span></h2>
+      <div class="detail-grid" style="grid-template-columns: repeat(4, 1fr);">
+        <div><strong>Total Tasks</strong><div class="metric">{{.Metrics.TotalTasks}}</div><div class="muted">{{range $k, $v := .Metrics.TasksByState}}{{$k}}: {{$v}} {{end}}</div></div>
+        <div><strong>Total Actions</strong><div class="metric">{{.Metrics.TotalActions}}</div><div class="muted">{{range $k, $v := .Metrics.ActionsByStatus}}{{$k}}: {{$v}} {{end}}</div></div>
+        <div><strong>Total Memory Cards</strong><div class="metric">{{.Metrics.TotalMemoryCards}}</div><div class="muted">{{range $k, $v := .Metrics.MemoryByStatus}}{{$k}}: {{$v}} {{end}}</div></div>
+        <div><strong>Active Skills</strong><div class="metric">{{.Metrics.ActiveSkills}}</div><div class="muted">enabled and loaded modules</div></div>
+      </div>
     </div>
     <div class="split">
       <div class="stack">
@@ -1605,6 +1914,12 @@ const webTemplateHTML = `
         {{if .Error}}
           <div class="chat-error">{{.Error}}</div>
         {{end}}
+        {{if .ModelUnconfigured}}
+          <div class="setup-banner">
+            <strong>No model configured.</strong>
+            Chat will use fallback replies until you <a href="/ui/models">set up a model provider</a>.
+          </div>
+        {{end}}
         <div class="chat-message-viewport" id="chat-stream">
           <div id="chat-messages">{{template "chat_messages" .}}</div>
         </div>
@@ -1626,7 +1941,7 @@ const webTemplateHTML = `
                 </span>
               </div>
               <div class="composer-toolbar-right">
-                <div class="composer-status" id="composer-status">Ready</div>
+                <div class="composer-status" id="composer-status"><span class="connection-dot" id="connection-dot"></span>Ready</div>
                 <button type="submit">Send Message</button>
               </div>
             </div>
@@ -1642,6 +1957,57 @@ const webTemplateHTML = `
         const message = document.getElementById("message");
         const errorBanner = document.querySelector(".chat-error");
         const composerStatus = document.getElementById("composer-status");
+        var BT = String.fromCharCode(96);
+        var fenceRe = new RegExp(BT + BT + BT + "(\\w*)\\n([\\s\\S]*?)" + BT + BT + BT, "g");
+        var inlineCodeRe = new RegExp(BT + "([^" + BT + "]+)" + BT, "g");
+        const renderMd = function (raw) {
+          var html = raw;
+          var codeBlocks = [];
+          html = html.replace(fenceRe, function (_, lang, code) {
+            var idx = codeBlocks.length;
+            codeBlocks.push('<pre' + (lang ? ' data-lang="' + escapeHTML(lang) + '"' : '') + '><code>' + escapeHTML(code.replace(/\n$/, '')) + '</code></pre>');
+            return '\x00CB' + idx + '\x00';
+          });
+          html = escapeHTML(html);
+          html = html.replace(inlineCodeRe, '<code>$1</code>');
+          html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          var lines = html.split('\n');
+          var out = [];
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            var cbMatch = line.match(/\x00CB(\d+)\x00/);
+            if (cbMatch) { out.push(codeBlocks[parseInt(cbMatch[1])]); continue; }
+            if (line === '---' || line === '***') { out.push('<hr>'); continue; }
+            if (line.indexOf('### ') === 0) { out.push('<h3>' + line.slice(4) + '</h3>'); continue; }
+            if (line.indexOf('## ') === 0) { out.push('<h2>' + line.slice(3) + '</h2>'); continue; }
+            if (line.indexOf('# ') === 0) { out.push('<h1>' + line.slice(2) + '</h1>'); continue; }
+            if (line.indexOf('&gt; ') === 0) { out.push('<blockquote>' + line.slice(5) + '</blockquote>'); continue; }
+            if (line === '') { out.push(''); continue; }
+            out.push('<p>' + line + '</p>');
+          }
+          return out.join('');
+        };
+        const addCopyButtons = function (root) {
+          (root || document).querySelectorAll('pre:not([data-copy-bound])').forEach(function (pre) {
+            pre.setAttribute('data-copy-bound', '1');
+            const btn = document.createElement('button');
+            btn.className = 'code-copy-btn';
+            btn.textContent = 'Copy';
+            btn.addEventListener('click', function (e) {
+              e.preventDefault(); e.stopPropagation();
+              const code = pre.querySelector('code');
+              const text = code ? code.textContent : pre.textContent;
+              navigator.clipboard.writeText(text).then(function () {
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+              });
+            });
+            pre.style.position = 'relative';
+            pre.appendChild(btn);
+          });
+        };
+        setInterval(function () { addCopyButtons(); }, 800);
         const sessionStatePanel = document.getElementById("session-state-panel");
         const scrollBottomButton = document.getElementById("scroll-bottom-button");
         const sessionSearch = document.getElementById("session-search");
@@ -1673,6 +2039,8 @@ const webTemplateHTML = `
             case "persisting": return "Persisting";
             case "writing_memory": return "Writing Memory";
             case "running": return "Running";
+            case "tool_call": return "Calling Tool";
+            case "tool_result": return "Tool Done";
             case "awaiting_approval": return "Approval Needed";
             case "blocked": return "Blocked";
             case "failed": return "Failed";
@@ -1703,6 +2071,8 @@ const webTemplateHTML = `
             case "writing_memory":
             case "running":
             case "working":
+            case "tool_call":
+            case "tool_result":
               return "stage-live";
             case "awaiting_approval":
             case "blocked":
@@ -1735,7 +2105,7 @@ const webTemplateHTML = `
         };
         const setOptimisticAssistant = function (node, opts) {
           if (!node) return;
-          const pendingStages = new Set(["routing", "queued", "running", "working", "searching", "planning", "reading", "writing", "executing", "triaging_email", "searching_github", "consolidating", "summarizing", "persisting", "writing_memory"]);
+          const pendingStages = new Set(["routing", "queued", "running", "working", "searching", "planning", "reading", "writing", "executing", "triaging_email", "searching_github", "consolidating", "summarizing", "persisting", "writing_memory", "tool_call", "tool_result"]);
           node.className = pendingStages.has((opts.stage || "").trim()) ? "message assistant pending" : "message assistant";
           const body = escapeHTML(opts.body || "Working on it...").replace(/\n/g, "<br>");
           node.innerHTML =
@@ -1757,10 +2127,16 @@ const webTemplateHTML = `
           }
           updateScrollBottomButton();
         };
+        const connectionDot = document.getElementById("connection-dot");
         const setComposerStatus = function (text, isError) {
           if (!composerStatus) return;
-          composerStatus.textContent = text || "";
+          const dot = connectionDot ? connectionDot.outerHTML : "";
+          composerStatus.innerHTML = dot + escapeHTML(text || "");
           composerStatus.classList.toggle("error", !!isError);
+        };
+        const setConnectionState = function (state) {
+          if (!connectionDot) return;
+          connectionDot.className = "connection-dot" + (state === "connected" ? "" : state === "reconnecting" ? " reconnecting" : " disconnected");
         };
         const resizeComposer = function () {
           if (!message) return;
@@ -1923,7 +2299,9 @@ const webTemplateHTML = `
           }
           source = new EventSource("/ui/chat/events?session={{queryEscape .ActiveSessionID}}");
           source.addEventListener("full", function (event) {
+            setConnectionState("connected");
             target.innerHTML = event.data;
+            addCopyButtons(target);
             setComposerStatus("Synced");
             if (!hydratedOnce) {
               stream.scrollTop = 0;
@@ -1937,9 +2315,19 @@ const webTemplateHTML = `
             try {
               const payload = JSON.parse(event.data);
               upsertMessageHTML(payload);
+              if (payload.message_id) {
+                delete rawContentMap[payload.message_id];
+                const el = ensureThread().querySelector('[data-message-id="' + payload.message_id + '"]');
+                if (el) {
+                  const body = el.querySelector(".message-body");
+                  if (body) body.classList.remove("typing-cursor");
+                  addCopyButtons(el);
+                }
+              }
               setComposerStatus(stageStatusText(payload.stage || "responded"));
             } catch (_) {}
           });
+          const rawContentMap = {};
           source.addEventListener("delta", function (event) {
             try {
               const payload = JSON.parse(event.data);
@@ -1951,7 +2339,12 @@ const webTemplateHTML = `
               }
               const body = existing.querySelector(".message-body");
               if (body && payload.delta) {
-                body.textContent = (body.textContent || "") + payload.delta;
+                const mid = payload.message_id;
+                if (!rawContentMap[mid]) rawContentMap[mid] = body.textContent || "";
+                rawContentMap[mid] += payload.delta;
+                body.innerHTML = renderMd(rawContentMap[mid]);
+                body.classList.add("typing-cursor");
+                addCopyButtons(body);
               }
               const meta = existing.querySelector(".message-meta");
               if (meta) {
@@ -1972,6 +2365,7 @@ const webTemplateHTML = `
           source.onerror = function () {
             source.close();
             source = null;
+            setConnectionState("reconnecting");
             setComposerStatus("Reconnecting...", false);
             if (!reconnectTimer) {
               reconnectTimer = window.setTimeout(async function () {
@@ -2001,7 +2395,7 @@ const webTemplateHTML = `
           if (submit) {
             submit.disabled = true;
             submit.dataset.label = submit.textContent;
-            submit.textContent = "Sending...";
+            submit.innerHTML = 'Sending<span class="sending-dots"><span></span><span></span><span></span></span>';
           }
           setComposerStatus("Routing...");
           try {
@@ -2111,7 +2505,7 @@ const webTemplateHTML = `
       <span class="session-state-label">Session State</span>
       {{if .Topic}}<span class="session-chip active">Topic {{preview .Topic 28}}</span>{{end}}
       {{if .FocusTaskID}}<span class="session-chip">Focus {{preview .FocusTaskID 14}}</span>{{end}}
-      {{if .PendingAction}}<span class="session-chip">Pending {{preview .PendingAction 16}}</span>{{end}}
+      {{if .PendingAction}}<span class="session-chip">{{if eq .PendingAction "confirm_task_intent"}}Awaiting confirmation{{else}}Pending {{preview .PendingAction 16}}{{end}}</span>{{end}}
       {{if .PendingQuestion}}<span class="session-chip">Question {{preview .PendingQuestion 28}}</span>{{end}}
       {{if and (not .Topic) (not .FocusTaskID) (not .PendingAction) (not .PendingQuestion)}}<span class="session-chip">Steady</span>{{end}}
     </div>
@@ -2119,90 +2513,159 @@ const webTemplateHTML = `
 {{end}}
 
 {{define "chat_message"}}
-  <div class="{{if or (eq .Message.Stage "queued") (eq .Message.Stage "running") (eq .Message.Stage "working") (eq .Message.Stage "searching") (eq .Message.Stage "planning") (eq .Message.Stage "reading") (eq .Message.Stage "writing") (eq .Message.Stage "executing") (eq .Message.Stage "triaging_email") (eq .Message.Stage "searching_github") (eq .Message.Stage "consolidating") (eq .Message.Stage "summarizing") (eq .Message.Stage "persisting") (eq .Message.Stage "writing_memory")}}message {{.Message.Role}} pending{{else}}message {{.Message.Role}}{{end}}" data-message-id="{{.Message.MessageID}}">
+  <div class="{{if or (eq .Message.Stage "queued") (eq .Message.Stage "running") (eq .Message.Stage "working") (eq .Message.Stage "searching") (eq .Message.Stage "planning") (eq .Message.Stage "reading") (eq .Message.Stage "writing") (eq .Message.Stage "executing") (eq .Message.Stage "triaging_email") (eq .Message.Stage "searching_github") (eq .Message.Stage "consolidating") (eq .Message.Stage "summarizing") (eq .Message.Stage "persisting") (eq .Message.Stage "writing_memory") (eq .Message.Stage "awaiting_confirmation")}}message {{.Message.Role}} pending{{else}}message {{.Message.Role}}{{end}}" data-message-id="{{.Message.MessageID}}">
     {{template "chat_message_inner" .}}
   </div>
 {{end}}
 
 {{define "chat_message_inner"}}
   <div class="message-content">
-    <div class="message-meta"><span class="pill {{if eq .Message.Role "assistant"}}warn{{end}}">{{.Message.Role}}</span>{{if .Message.IntentKind}}<span class="pill intent">{{.Message.IntentKind}}</span>{{end}}{{if .Message.Stage}}<span class="pill {{chatStageClass .Message.Stage}}">{{chatStageLabel .Message.Stage}}</span>{{end}}{{if .Message.SelectedSkill}}<span class="pill">{{.Message.SelectedSkill}}</span>{{end}}{{if .Message.TaskState}}<span class="pill danger">{{.Message.TaskState}}</span>{{end}}</div>
+    {{/* Header: only role + stage. Intent / skill / task_state now live in the
+         structured task card below so the top row stays uncluttered. */}}
+    <div class="message-meta">
+      <span class="pill {{if eq .Message.Role "assistant"}}warn{{end}}">{{.Message.Role}}</span>
+      {{if .Message.Stage}}<span class="pill {{chatStageClass .Message.Stage}}">{{chatStageLabel .Message.Stage}}</span>{{end}}
+    </div>
+
     <div class="message-body">{{renderChatContentHTML .Message.Role .Message.Content}}</div>
-    {{if .Message.TaskID}}<div class="muted message-footer">task: <a href="/ui/tasks?task_id={{.Message.TaskID}}">{{.Message.TaskID}}</a></div>{{end}}
+
+    {{if .Message.ToolTrace}}
+      <div class="message-section message-tool-trace">
+        <div class="message-section-label">Tools used ({{len .Message.ToolTrace}})</div>
+        {{range .Message.ToolTrace}}
+          <div class="tool-trace-row">
+            <span class="tool-trace-name">{{.ToolName}}</span>
+            {{if .Arguments}}<span class="tool-trace-args">{{formatToolArgs .Arguments}}</span>{{end}}
+            {{if .Error}}
+              <div class="tool-trace-error">✗ {{.Error}}</div>
+            {{else if .ResultPreview}}
+              <div class="tool-trace-result">→ {{.ResultPreview}}</div>
+            {{end}}
+          </div>
+        {{end}}
+      </div>
+    {{end}}
+
+    {{if or .Message.TaskID .Message.SelectedSkill .Message.TaskState .Message.ExecutionProfile}}
+      <div class="message-section message-task-card">
+        <div class="message-section-label">Task</div>
+        {{if .Message.TaskID}}
+          <div class="task-card-row">
+            <span class="task-card-label">ID</span>
+            <a class="task-card-id" href="/ui/tasks?task_id={{.Message.TaskID}}">{{.Message.TaskID}}</a>
+          </div>
+        {{end}}
+        <div class="task-card-row">
+          {{if .Message.TaskState}}<span class="task-card-chip state-{{.Message.TaskState}}">State: {{.Message.TaskState}}</span>{{end}}
+          {{if .Message.SelectedSkill}}<span class="task-card-chip">Skill: {{.Message.SelectedSkill}}</span>{{end}}
+          {{if .Message.ExecutionProfile}}<span class="task-card-chip">Profile: {{.Message.ExecutionProfile}}</span>{{end}}
+        </div>
+      </div>
+    {{end}}
+
     {{if .Message.Links}}
-      <div class="message-resource-grid compact">
-        {{range .Message.Links}}
-          {{$kind := resourceKind .Label .Href}}
-          <a class="resource-card {{$kind}}" href="{{.Href}}" data-preview-url="{{previewURL .Href ""}}">
-            <div class="resource-header">
-              <div>
-                <div class="resource-kicker">{{$kind}}</div>
-                <div class="resource-title">{{.Label}}</div>
+      <div class="message-section">
+        <div class="message-section-label">Attachments</div>
+        <div class="message-resource-grid compact">
+          {{range .Message.Links}}
+            {{$kind := resourceKind .Label .Href}}
+            <a class="resource-card {{$kind}}" href="{{.Href}}" data-preview-url="{{previewURL .Href ""}}">
+              <div class="resource-header">
+                <div>
+                  <div class="resource-kicker">{{$kind}}</div>
+                  <div class="resource-title">{{.Label}}</div>
+                </div>
+                <div class="resource-icon">{{resourceIcon $kind}}</div>
               </div>
-              <div class="resource-icon">{{resourceIcon $kind}}</div>
-            </div>
-            <div class="resource-sub">{{.Href}}</div>
-            <div class="resource-preview">{{resourcePreview .Label .Href}}</div>
-          </a>
-        {{end}}
+              <div class="resource-sub">{{.Href}}</div>
+              <div class="resource-preview">{{resourcePreview .Label .Href}}</div>
+            </a>
+          {{end}}
+        </div>
       </div>
     {{end}}
+
     {{if .Message.Actions}}
-      <div class="message-resource-grid compact">
-        {{range .Message.Actions}}
-          <form class="resource-card action" method="post" action="{{.Href}}" data-preview-url="{{previewURL .Href .Method}}">
-            <div class="resource-header">
-              <div>
-                <div class="resource-kicker">Action</div>
-                <div class="resource-title">{{.Label}}</div>
+      <div class="message-section">
+        <div class="message-section-label">Actions</div>
+        <div class="message-resource-grid compact">
+          {{range .Message.Actions}}
+            <form class="resource-card action" method="post" action="{{.Href}}" data-preview-url="{{previewURL .Href .Method}}">
+              <div class="resource-header">
+                <div>
+                  <div class="resource-kicker">Action</div>
+                  <div class="resource-title">{{.Label}}</div>
+                </div>
+                <div class="resource-icon">{{resourceIcon "action"}}</div>
               </div>
-              <div class="resource-icon">{{resourceIcon "action"}}</div>
-            </div>
-            <div class="resource-sub">{{if .Method}}{{.Method}}{{else}}POST{{end}} {{.Href}}</div>
-            <div class="resource-preview">{{actionPreview .Label .Href .Method}}</div>
-            <input type="hidden" name="session_id" value="{{$.ActiveSessionID}}">
-            <button class="secondary resource-action" type="submit">{{.Label}}</button>
-          </form>
-        {{end}}
+              <div class="resource-sub">{{if .Method}}{{.Method}}{{else}}POST{{end}} {{.Href}}</div>
+              <div class="resource-preview">{{actionPreview .Label .Href .Method}}</div>
+              <input type="hidden" name="session_id" value="{{$.ActiveSessionID}}">
+              <button class="secondary resource-action" type="submit">{{.Label}}</button>
+            </form>
+          {{end}}
+        </div>
       </div>
     {{end}}
-    {{if .Message.IntentKind}}
-      <details>
-        <summary>Intent: {{.Message.IntentKind}}{{if hasConfidence .Message.IntentConfidence}} ({{printf "%.2f" .Message.IntentConfidence}}){{end}}</summary>
-        {{if .Message.IntentReason}}<div class="muted" style="margin-top:8px;">{{.Message.IntentReason}}</div>{{end}}
-      </details>
+
+    {{/* Collapse every diagnostic panel (intent, memory, recent tasks) into a
+         single <details> so the card stays compact. Users who want the raw
+         traces can still open it. */}}
+    {{$hasIntent := .Message.IntentKind}}
+    {{$ctx := .Message.Context}}
+    {{$hasRecall := false}}
+    {{$hasRecentTasks := false}}
+    {{with $ctx}}
+      {{if .RecallHits}}{{$hasRecall = true}}{{end}}
+      {{if .RecentTasks}}{{$hasRecentTasks = true}}{{end}}
     {{end}}
-    {{with .Message.Context}}
-      {{if .RecallHits}}
-        <details>
-          <summary>Relevant Memory ({{len .RecallHits}})</summary>
-          <table>
-            <tr><th>Source</th><th>Card</th><th>Snippet</th></tr>
-            {{range .RecallHits}}
-              <tr>
-                <td>{{.Source}}</td>
-                <td><a href="/ui/memory?card_id={{.CardID}}">{{.CardType}}</a><div class="muted">{{.CardID}}</div></td>
-                <td>{{.Snippet}}</td>
-              </tr>
+    {{if or $hasIntent $hasRecall $hasRecentTasks}}
+      <details class="message-diagnostics">
+        <summary>Diagnostics</summary>
+        <div class="diagnostics-body">
+          {{if $hasIntent}}
+            <div class="diagnostics-section">
+              <div class="diagnostics-label">Intent</div>
+              <div class="diagnostics-row">
+                <span class="task-card-chip">{{.Message.IntentKind}}{{if hasConfidence .Message.IntentConfidence}} ({{printf "%.2f" .Message.IntentConfidence}}){{end}}</span>
+                {{if .Message.IntentReason}}<span class="diagnostics-muted">{{.Message.IntentReason}}</span>{{end}}
+              </div>
+            </div>
+          {{end}}
+          {{with $ctx}}
+            {{if .RecallHits}}
+              <div class="diagnostics-section">
+                <div class="diagnostics-label">Relevant Memory ({{len .RecallHits}})</div>
+                <table>
+                  <tr><th>Source</th><th>Card</th><th>Snippet</th></tr>
+                  {{range .RecallHits}}
+                    <tr>
+                      <td>{{.Source}}</td>
+                      <td><a href="/ui/memory?card_id={{.CardID}}">{{.CardType}}</a><div class="muted">{{.CardID}}</div></td>
+                      <td>{{.Snippet}}</td>
+                    </tr>
+                  {{end}}
+                </table>
+              </div>
             {{end}}
-          </table>
-        </details>
-      {{end}}
-      {{if .RecentTasks}}
-        <details>
-          <summary>Recent Tasks ({{len .RecentTasks}})</summary>
-          <table>
-            <tr><th>Task</th><th>State</th><th>Skill</th></tr>
-            {{range .RecentTasks}}
-              <tr>
-                <td><a href="/ui/tasks?task_id={{.TaskID}}">{{.Title}}</a><div class="muted">{{.TaskID}}</div></td>
-                <td>{{.State}}</td>
-                <td>{{.SelectedSkill}}</td>
-              </tr>
+            {{if .RecentTasks}}
+              <div class="diagnostics-section">
+                <div class="diagnostics-label">Recent Tasks ({{len .RecentTasks}})</div>
+                <table>
+                  <tr><th>Task</th><th>State</th><th>Skill</th></tr>
+                  {{range .RecentTasks}}
+                    <tr>
+                      <td><a href="/ui/tasks?task_id={{.TaskID}}">{{.Title}}</a><div class="muted">{{.TaskID}}</div></td>
+                      <td>{{.State}}</td>
+                      <td>{{.SelectedSkill}}</td>
+                    </tr>
+                  {{end}}
+                </table>
+              </div>
             {{end}}
-          </table>
-        </details>
-      {{end}}
+          {{end}}
+        </div>
+      </details>
     {{end}}
   </div>
 {{end}}
@@ -2714,63 +3177,444 @@ const webTemplateHTML = `
 {{define "models"}}
   {{template "header" .}}
     <h1>Model Settings</h1>
-    <div class="sub">Configure the runtime model gateway without editing environment files. Changes apply to chat, routing, and skill summaries without restarting the server.</div>
+    <div class="sub">Pick a provider, paste your API key, and run a live connectivity + <code>tool_calls</code> check — AgentOS needs the model to call tools for skills, chat, and runtime flows. Changes apply instantly; no restart required.</div>
+
+    <style>
+      .models-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .models-bar .pill { cursor: default; }
+      .model-status-banner {
+        border-radius: 16px;
+        padding: 14px 16px;
+        margin-bottom: 14px;
+        border: 1px solid rgba(217,207,191,0.95);
+        background: rgba(255,255,255,0.82);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        row-gap: 8px;
+        align-items: center;
+      }
+      .model-status-banner.ok {
+        border-color: rgba(15,118,110,0.45);
+        background: rgba(15,118,110,0.07);
+      }
+      .model-status-banner.warn {
+        border-color: rgba(217,119,6,0.45);
+        background: rgba(217,119,6,0.08);
+      }
+      .model-status-banner.err {
+        border-color: rgba(185,28,28,0.5);
+        background: rgba(185,28,28,0.08);
+      }
+      .model-status-banner .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        display: inline-block;
+        flex: 0 0 10px;
+      }
+      .model-status-banner .dot.ok { background: #15803d; box-shadow: 0 0 0 3px rgba(21,128,61,0.18); }
+      .model-status-banner .dot.warn { background: #b45309; box-shadow: 0 0 0 3px rgba(180,83,9,0.18); }
+      .model-status-banner .dot.err { background: #b91c1c; box-shadow: 0 0 0 3px rgba(185,28,28,0.18); }
+      .model-status-banner .dot.idle { background: #9ca3af; box-shadow: 0 0 0 3px rgba(156,163,175,0.18); }
+      .model-status-banner .title { font-weight: 700; }
+      .model-status-banner .detail { color: var(--muted); font-size: 13px; flex-basis: 100%; }
+      .model-status-banner .actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+      .welcome-card {
+        border: 2px dashed rgba(15,118,110,0.4);
+        border-radius: 16px;
+        padding: 16px 18px;
+        background: rgba(15,118,110,0.05);
+        margin-bottom: 14px;
+      }
+      .welcome-card h2 { margin: 0 0 6px 0; font-size: 16px; }
+      .welcome-card ol { margin: 8px 0 0 20px; padding: 0; font-size: 13px; line-height: 1.7; }
+      .welcome-card ol code {
+        font-family: "IBM Plex Mono", monospace;
+        background: rgba(255,255,255,0.7);
+        padding: 1px 6px;
+        border-radius: 6px;
+        font-size: 12px;
+      }
+      .snippet-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 8px;
+        flex-wrap: wrap;
+      }
+      .snippet-row code {
+        flex: 1;
+        background: rgba(255,255,255,0.85);
+        border: 1px solid rgba(217,207,191,0.9);
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        overflow-x: auto;
+      }
+      .provider-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .provider-card {
+        border: 2px solid rgba(217,207,191,0.95);
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255,255,255,0.82);
+        cursor: pointer;
+        transition: border-color 120ms ease, background 120ms ease, transform 80ms ease;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 152px;
+      }
+      .provider-card:hover { background: rgba(255,255,255,0.96); border-color: rgba(15,118,110,0.35); }
+      .provider-card.active {
+        border-color: var(--accent);
+        background: rgba(15,118,110,0.07);
+        box-shadow: 0 6px 20px rgba(15,118,110,0.15);
+      }
+      .provider-card .title { font-weight: 700; font-size: 15px; }
+      .provider-card .tagline { color: var(--muted); font-size: 12px; line-height: 1.45; }
+      .provider-card .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+      .provider-card a.docs-link {
+        font-size: 11px;
+        color: var(--accent);
+        text-decoration: underline;
+      }
+      .key-row {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+      }
+      .key-row input { flex: 1; }
+      .key-row .eye-toggle {
+        padding: 0 14px;
+        font-family: inherit;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.9);
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .suggest-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .suggest-chip {
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(217,207,191,0.9);
+        background: rgba(255,255,255,0.82);
+        cursor: pointer;
+        color: var(--ink);
+      }
+      .suggest-chip:hover { border-color: var(--accent); color: var(--accent); }
+      .profile-chip {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(217,207,191,0.95);
+        background: rgba(255,255,255,0.88);
+        font-size: 12px;
+      }
+      .profile-chip form { display: inline; }
+      .profile-chip button.linklike {
+        background: transparent;
+        border: 0;
+        padding: 0;
+        color: var(--accent);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .profile-chip button.linklike.danger { color: var(--danger); }
+      .test-result {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(217,207,191,0.95);
+        background: rgba(255,250,240,0.82);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .test-result.ok { border-color: rgba(15,118,110,0.45); background: rgba(15,118,110,0.07); }
+      .test-result.err { border-color: rgba(185,28,28,0.5); background: rgba(185,28,28,0.07); }
+      .test-result pre { max-height: 180px; overflow: auto; margin-top: 8px; }
+      .test-result .row { display: flex; flex-wrap: wrap; gap: 12px; row-gap: 4px; }
+      .persist-banner {
+        border: 1px solid rgba(217,119,6,0.35);
+        background: rgba(217,119,6,0.08);
+        color: var(--ink);
+        border-radius: 14px;
+        padding: 10px 14px;
+        font-size: 13px;
+      }
+      .persist-banner.ok {
+        border-color: rgba(15,118,110,0.4);
+        background: rgba(15,118,110,0.07);
+      }
+      .persist-banner code {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        background: rgba(255,255,255,0.7);
+        padding: 1px 6px;
+        border-radius: 6px;
+      }
+    </style>
+
+    {{/* ───── Current model health banner (A) ───── */}}
+    {{if .LastTest}}
+      {{if .LastTest.Ok}}
+        <div class="model-status-banner ok">
+          <span class="dot ok"></span>
+          <div>
+            <div class="title">Model online · {{.LastTest.Provider}} / {{.LastTest.Model}}</div>
+            <div class="detail">
+              Last test {{.LastTest.AgeHuman}} · {{.LastTest.LatencyMs}}ms
+              {{if .LastTest.ToolCallsChecked}}
+                · tool_calls {{if .LastTest.ToolCallsSupported}}<strong style="color:#15803d;">supported ✓</strong>{{else}}<strong style="color:#b45309;">not supported ✗</strong>{{end}}
+              {{end}}
+              {{if not .LastTest.Matches}}
+                · <span style="color:#b45309;">form differs from tested config — Save to apply, or Re-test.</span>
+              {{end}}
+            </div>
+          </div>
+          <div class="actions">
+            <button type="button" class="secondary" id="retest-banner-btn">Re-test now</button>
+          </div>
+        </div>
+      {{else}}
+        <div class="model-status-banner err">
+          <span class="dot err"></span>
+          <div>
+            <div class="title">Model unreachable · {{if .LastTest.Provider}}{{.LastTest.Provider}}{{else}}n/a{{end}}{{if .LastTest.Model}} / {{.LastTest.Model}}{{end}}</div>
+            <div class="detail">
+              Last test {{.LastTest.AgeHuman}} failed: {{if .LastTest.Error}}{{.LastTest.Error}}{{else}}unknown error{{end}}
+            </div>
+          </div>
+          <div class="actions">
+            <button type="button" class="secondary" id="retest-banner-btn">Re-test now</button>
+          </div>
+        </div>
+      {{end}}
+    {{else}}
+      <div class="model-status-banner warn">
+        <span class="dot {{if .IsFirstRun}}warn{{else}}idle{{end}}"></span>
+        <div>
+          <div class="title">
+            {{if .IsFirstRun}}
+              No model configured yet
+            {{else}}
+              Never tested · {{if .Config.Provider}}{{.Config.Provider}}{{else}}none{{end}}{{if .Config.Conversation.Model}} / {{.Config.Conversation.Model}}{{end}}
+            {{end}}
+          </div>
+          <div class="detail">
+            {{if .IsFirstRun}}
+              Click a provider card below, paste your API key, then run Test Connection to bring the AgentOS online.
+            {{else}}
+              Click "Test Connection" below to verify this model answers chat turns and supports tool_calls.
+            {{end}}
+          </div>
+        </div>
+        {{if not .IsFirstRun}}
+        <div class="actions">
+          <button type="button" class="secondary" id="retest-banner-btn">Test now</button>
+        </div>
+        {{end}}
+      </div>
+    {{end}}
+
+    {{/* ───── First-run welcome card (B) ───── */}}
+    {{if .IsFirstRun}}
+      <div class="welcome-card">
+        <h2>Get your AgentOS model online in 3 steps</h2>
+        <ol>
+          <li>Pick a provider card below. <strong>SiliconFlow</strong> is the fastest zero-spend path — click "get API key ↗" on the card.</li>
+          <li>Paste the API key into the <code>API Key</code> field (show/hide eye button is next to it).</li>
+          <li>Click <strong>Test Connection</strong>. A green badge + <code>tool_calls ✓</code> means the model can run skills, chat, and AgentOS workflows. Then click <strong>Save Model Settings</strong>.</li>
+        </ol>
+      </div>
+    {{end}}
+
+    {{/* ───── Persistence banner (F) ───── */}}
+    {{if .PersistsSecrets}}
+      <div class="persist-banner ok" style="margin-bottom:12px;">
+        API keys <strong>will persist</strong> to <code>{{if .ConfigPath}}{{.ConfigPath}}{{else}}runtime/model/config.json{{end}}</code>. Make sure this file is gitignored.
+      </div>
+    {{else}}
+      <div class="persist-banner" style="margin-bottom:12px;">
+        <strong>Safe mode:</strong> saving will strip the API key from <code>{{if .ConfigPath}}{{.ConfigPath}}{{else}}runtime/model/config.json{{end}}</code> on disk, so the key only lives in memory until the daemon restarts.
+        <div class="snippet-row">
+          <span class="muted" style="font-size:12px;">To persist keys, add this to <code>.env.local</code> and restart the daemon:</span>
+        </div>
+        <div class="snippet-row">
+          <code id="persist-snippet">{{.PersistSnippet}}</code>
+          <button type="button" class="secondary" id="copy-persist-btn" style="white-space:nowrap;">Copy</button>
+        </div>
+      </div>
+    {{end}}
+
+    <div class="models-bar">
+      {{if .SuccessMessage}}<span class="pill">{{.SuccessMessage}}</span>{{end}}
+      {{if .TestMessage}}<span class="pill secondary">{{.TestMessage}}</span>{{end}}
+      {{if .ErrorMessage}}<span class="pill danger">{{.ErrorMessage}}</span>{{end}}
+      {{if .ProfileHint}}<span class="pill secondary">{{.ProfileHint}}</span>{{end}}
+    </div>
+
+    {{if .ProfilesEnabled}}
+    <div class="card" style="margin-bottom:14px;">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <strong>Saved profiles:</strong>
+          {{if .ProfileNames}}
+            {{range .ProfileNames}}
+              <span class="profile-chip">
+                <span>{{.}}</span>
+                <form method="get" action="/ui/models" title="Load into form"><input type="hidden" name="load_profile" value="{{.}}"><button type="submit" class="linklike">load</button></form>
+                <form method="post" action="/ui/models/profile/apply" title="Apply as active config"><input type="hidden" name="profile_apply_name" value="{{.}}"><button type="submit" class="linklike">apply</button></form>
+                <form method="post" action="/ui/models/profile/delete" onsubmit="return confirm('Delete profile {{.}}?');"><input type="hidden" name="profile_delete_name" value="{{.}}"><button type="submit" class="linklike danger">delete</button></form>
+              </span>
+            {{end}}
+          {{else}}
+            <span class="muted">no profiles saved yet</span>
+          {{end}}
+        </div>
+        <div class="muted" style="font-size:12px;">Active: <strong>{{if .Config.Provider}}{{.Config.Provider}}{{else}}none{{end}}</strong>{{if .Config.Conversation.Model}} · {{.Config.Conversation.Model}}{{end}}</div>
+      </div>
+    </div>
+    {{end}}
+
     <div class="split">
       <div class="card stack">
-        <h2>Provider Configuration</h2>
-        {{if .SuccessMessage}}<div><span class="pill">{{.SuccessMessage}}</span></div>{{end}}
-        {{if .TestMessage}}<div><span class="pill secondary">{{.TestMessage}}</span></div>{{end}}
-        {{if .ErrorMessage}}<div><span class="pill danger">{{.ErrorMessage}}</span></div>{{end}}
-        <form method="post" action="/ui/models" class="stack">
+        <form id="{{.FormID}}" method="post" action="/ui/models" class="stack">
+
           <div>
-            <label class="muted" for="provider">Provider</label>
-            <select id="provider" name="provider">
+            <div class="dense-title">1 · Choose a provider</div>
+            <div class="muted" style="font-size:12px;margin-bottom:10px;">Click a card to auto-fill Base URL and recommended model. You can still tweak everything by hand below.</div>
+            <div class="provider-grid" id="provider-cards">
+              {{range .Presets}}
+                <div class="provider-card{{if eq $.Config.Provider .ID}} active{{end}}"
+                     data-provider="{{.ID}}"
+                     data-base-url="{{.BaseURL}}"
+                     data-default-model="{{.DefaultModel}}"
+                     data-recommended="{{.RecommendedModel}}"
+                     data-suggested="{{join .SuggestedModels "|"}}"
+                     data-api-key-url="{{.APIKeyURL}}"
+                     data-docs-url="{{.DocsURL}}"
+                     data-notes="{{.Notes}}">
+                  <div class="title">{{.Label}}</div>
+                  <div class="tagline">{{.Tagline}}</div>
+                  <div class="meta">
+                    {{if .SupportsTools}}<span class="pill">tool_calls ✓</span>{{end}}
+                    {{if .APIKeyURL}}<a class="docs-link" href="{{.APIKeyURL}}" target="_blank" rel="noopener">get API key ↗</a>{{end}}
+                    {{if .DocsURL}}<a class="docs-link" href="{{.DocsURL}}" target="_blank" rel="noopener">docs ↗</a>{{end}}
+                  </div>
+                </div>
+              {{end}}
+            </div>
+            <select id="provider" name="provider" style="margin-top:10px;">
               {{range .Providers}}
                 <option value="{{.}}" {{if eq $.Config.Provider .}}selected{{end}}>{{.}}</option>
               {{end}}
             </select>
+            <div class="muted" id="provider-notes" style="font-size:12px;margin-top:6px;"></div>
           </div>
+
           <div>
-            <label class="muted" for="base_url">Base URL</label>
-            <input id="base_url" type="text" name="base_url" value="{{.Config.BaseURL}}" placeholder="https://api.deepseek.com / https://api.siliconflow.cn/v1 / https://api.openai.com/v1">
+            <div class="dense-title">2 · Credentials</div>
+            <div style="margin-top:8px;">
+              <label class="muted" for="base_url">Base URL</label>
+              <input id="base_url" type="text" name="base_url" value="{{.Config.BaseURL}}" placeholder="https://api.siliconflow.cn/v1">
+            </div>
+            <div style="margin-top:10px;">
+              <label class="muted" for="api_key">API Key</label>
+              <div class="key-row">
+                <input id="api_key" type="password" name="api_key" value="" placeholder="Leave blank to keep current key" autocomplete="off" spellcheck="false">
+                <button type="button" class="eye-toggle" id="eye-toggle" aria-label="Show API key">show</button>
+              </div>
+              <div class="muted" style="margin-top:6px;font-size:12px;">
+                {{if .HasAPIKey}}Current key: <code>{{.MaskedAPIKey}}</code>{{else}}No API key configured.{{end}}
+              </div>
+            </div>
           </div>
+
           <div>
-            <label class="muted" for="api_key">API Key</label>
-            <input id="api_key" type="text" name="api_key" value="" placeholder="Leave blank to keep current key">
-            <div class="muted" style="margin-top:8px;">{{if .HasAPIKey}}Current key: {{.MaskedAPIKey}}{{else}}No API key configured{{end}}</div>
+            <div class="dense-title">3 · Main model</div>
+            <div class="muted" style="font-size:12px;margin-top:4px;">This is the <strong>Conversation</strong> model. By default the same name is used for Routing and Skills — uncheck "sync" if you want them separate.</div>
+            <div style="margin-top:8px;">
+              <label class="muted" for="conversation_model">Conversation Model</label>
+              <input id="conversation_model" type="text" name="conversation_model" value="{{.Config.Conversation.Model}}" placeholder="e.g. Qwen/Qwen2.5-7B-Instruct">
+              <div class="suggest-chips" id="suggest-chips"></div>
+            </div>
+            <label class="muted" style="display:inline-flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;">
+              <input type="checkbox" id="sync-models" checked>
+              Sync the same model across Routing and Skills profiles (recommended)
+            </label>
           </div>
-          <div class="grid three">
-            <div class="decision-card">
-              <div class="dense-title">Conversation Model</div>
-              <div class="stack" style="margin-top:10px;">
-                <input type="text" name="conversation_model" value="{{.Config.Conversation.Model}}" placeholder="deepseek-chat or gpt-4.1-mini">
-                <input type="text" name="conversation_max_tokens" value="{{.Config.Conversation.MaxTokens}}" placeholder="1600">
-                <input type="text" name="conversation_temperature" value="{{printf "%.2f" .Config.Conversation.Temperature}}" placeholder="0.20">
+
+          <details id="advanced-profiles">
+            <summary>Advanced · per-profile overrides</summary>
+            <div class="grid three" style="margin-top:12px;">
+              <div class="decision-card">
+                <div class="dense-title">Conversation Model</div>
+                <div class="stack" style="margin-top:10px;">
+                  <input type="number" name="conversation_max_tokens" value="{{.Config.Conversation.MaxTokens}}" placeholder="1600" min="0" max="128000" step="10">
+                  <input type="number" name="conversation_temperature" value="{{printf "%.2f" .Config.Conversation.Temperature}}" placeholder="0.20" min="0" max="2" step="0.05">
+                  <div class="muted" style="font-size:11px;">max_tokens · temperature</div>
+                </div>
+              </div>
+              <div class="decision-card">
+                <div class="dense-title">Routing Model</div>
+                <div class="stack" style="margin-top:10px;">
+                  <input type="text" id="routing_model" name="routing_model" value="{{.Config.Routing.Model}}" placeholder="same as Conversation">
+                  <input type="number" name="routing_max_tokens" value="{{.Config.Routing.MaxTokens}}" placeholder="220" min="0" max="128000" step="10">
+                  <div class="muted" style="font-size:11px;">Routing is always temperature 0.</div>
+                </div>
+              </div>
+              <div class="decision-card">
+                <div class="dense-title">Skills / Summary Model</div>
+                <div class="stack" style="margin-top:10px;">
+                  <input type="text" id="skills_model" name="skills_model" value="{{.Config.Skills.Model}}" placeholder="same as Conversation">
+                  <input type="number" name="skills_max_tokens" value="{{.Config.Skills.MaxTokens}}" placeholder="1200" min="0" max="128000" step="10">
+                  <input type="number" name="skills_temperature" value="{{printf "%.2f" .Config.Skills.Temperature}}" placeholder="0.20" min="0" max="2" step="0.05">
+                </div>
               </div>
             </div>
-            <div class="decision-card">
-              <div class="dense-title">Routing Model</div>
-              <div class="stack" style="margin-top:10px;">
-                <input type="text" name="routing_model" value="{{.Config.Routing.Model}}" placeholder="deepseek-chat or gpt-4.1-mini">
-                <input type="text" name="routing_max_tokens" value="{{.Config.Routing.MaxTokens}}" placeholder="220">
-                <div class="muted">Routing stays deterministic with temperature 0.</div>
-              </div>
-            </div>
-            <div class="decision-card">
-              <div class="dense-title">Skills / Summary Model</div>
-              <div class="stack" style="margin-top:10px;">
-                <input type="text" name="skills_model" value="{{.Config.Skills.Model}}" placeholder="deepseek-chat or gpt-4.1-mini">
-                <input type="text" name="skills_max_tokens" value="{{.Config.Skills.MaxTokens}}" placeholder="1200">
-                <input type="text" name="skills_temperature" value="{{printf "%.2f" .Config.Skills.Temperature}}" placeholder="0.20">
-              </div>
-            </div>
-          </div>
+          </details>
+
           <div class="grid two">
             <button type="submit">Save Model Settings</button>
-            <button type="submit" class="secondary" formaction="/ui/models/test">Test Connection</button>
+            <button type="button" id="test-connection-btn" class="secondary">Test Connection · probe tool_calls</button>
           </div>
+
+          <div id="test-result" class="test-result" style="display:none;"></div>
+
+          {{if .ProfilesEnabled}}
+            <div class="decision-card">
+              <div class="dense-title">Save current form as a named profile</div>
+              <div class="muted" style="font-size:12px;margin-top:6px;">Profiles include the API key — they're written to the local profiles file so you can switch providers in one click later.</div>
+              <div class="key-row" style="margin-top:10px;">
+                <input type="text" name="profile_save_name" value="" placeholder="e.g. siliconflow-work or deepseek-home">
+                <button type="submit" class="secondary" formaction="/ui/models/profile/save">Save as profile</button>
+              </div>
+            </div>
+          {{end}}
         </form>
       </div>
+
       <div class="card stack">
         <h2>Runtime Notes</h2>
         <div class="decision-card">
@@ -2794,11 +3638,277 @@ const webTemplateHTML = `
           <div class="dense-sub">{{.Config.Skills.Model}} · max {{.Config.Skills.MaxTokens}} · temp {{printf "%.2f" .Config.Skills.Temperature}}</div>
         </div>
         <div class="decision-card">
+          <div class="dense-title">Persistence</div>
+          <div class="dense-sub">{{if .PersistsSecrets}}Keys persist to <code>{{.ConfigPath}}</code>{{else}}Safe mode · keys NOT written to disk. Set <code>MNEMOSYNE_MODEL_CONFIG_PATH</code> to a gitignored file to persist.{{end}}</div>
+        </div>
+        <div class="decision-card">
           <div class="dense-title">Supported APIs</div>
-          <div class="dense-sub">This page targets chat-completions compatible APIs. Use the built-in providers for DeepSeek, SiliconFlow, or OpenAI, or choose openai-compatible for any compatible endpoint.</div>
+          <div class="dense-sub">OpenAI-compatible chat completions. The model MUST support <code>tools</code> / <code>tool_calls</code> — use the Test button to verify before running skills or chat.</div>
         </div>
       </div>
     </div>
+
+    <script>
+      (function() {
+        var cards = document.querySelectorAll('#provider-cards .provider-card');
+        var providerSelect = document.getElementById('provider');
+        var baseURL = document.getElementById('base_url');
+        var conversationModel = document.getElementById('conversation_model');
+        var routingModel = document.getElementById('routing_model');
+        var skillsModel = document.getElementById('skills_model');
+        var sync = document.getElementById('sync-models');
+        var chips = document.getElementById('suggest-chips');
+        var notes = document.getElementById('provider-notes');
+        var eye = document.getElementById('eye-toggle');
+        var apiKey = document.getElementById('api_key');
+        var testBtn = document.getElementById('test-connection-btn');
+        var testResult = document.getElementById('test-result');
+        var form = document.getElementById({{.FormID}});
+
+        function applyPresetFromCard(card, force) {
+          if (!card) return;
+          var provider = card.getAttribute('data-provider');
+          var preBase = card.getAttribute('data-base-url') || '';
+          var defaultModel = card.getAttribute('data-default-model') || '';
+          var suggested = (card.getAttribute('data-suggested') || '').split('|').filter(Boolean);
+          var note = card.getAttribute('data-notes') || '';
+
+          if (providerSelect) providerSelect.value = provider;
+
+          if (baseURL && (force || !baseURL.value.trim()) && preBase) baseURL.value = preBase;
+          if (conversationModel && (force || !conversationModel.value.trim()) && defaultModel) {
+            conversationModel.value = defaultModel;
+            syncModelIfNeeded();
+          }
+
+          if (chips) {
+            chips.innerHTML = '';
+            suggested.forEach(function(name) {
+              var b = document.createElement('button');
+              b.type = 'button';
+              b.className = 'suggest-chip';
+              b.textContent = name;
+              b.addEventListener('click', function() {
+                conversationModel.value = name;
+                syncModelIfNeeded();
+              });
+              chips.appendChild(b);
+            });
+          }
+
+          if (notes) notes.textContent = note;
+
+          cards.forEach(function(c) { c.classList.remove('active'); });
+          card.classList.add('active');
+        }
+
+        function syncModelIfNeeded() {
+          if (!sync || !sync.checked) return;
+          if (routingModel) routingModel.value = conversationModel.value;
+          if (skillsModel) skillsModel.value = conversationModel.value;
+        }
+
+        cards.forEach(function(card) {
+          card.addEventListener('click', function() { applyPresetFromCard(card, true); });
+        });
+        if (conversationModel) {
+          conversationModel.addEventListener('input', syncModelIfNeeded);
+        }
+        if (sync) {
+          sync.addEventListener('change', function() {
+            if (sync.checked) syncModelIfNeeded();
+          });
+        }
+
+        // Populate suggest chips / notes for the active provider on first load.
+        var active = document.querySelector('#provider-cards .provider-card.active');
+        if (active) applyPresetFromCard(active, false);
+
+        if (eye && apiKey) {
+          eye.addEventListener('click', function() {
+            if (apiKey.type === 'password') {
+              apiKey.type = 'text';
+              eye.textContent = 'hide';
+            } else {
+              apiKey.type = 'password';
+              eye.textContent = 'show';
+            }
+          });
+        }
+
+        // diagnoseError maps a raw error string from the model gateway into an
+        // actionable hint shown under the red "Connection failed" card. This is
+        // where we give OpenClaw-like "here is what to fix" guidance — most
+        // real failures map to quota / auth / tool_calls / network.
+        function diagnoseError(raw) {
+          var msg = String(raw || '').toLowerCase();
+          if (/quota|insufficient_quota|exceeded .*quota|billing|rate.?limit|too many requests/.test(msg)) {
+            return 'Quota or rate limit exhausted on this provider. Either top up the account, or switch to a cheaper provider card below (SiliconFlow / DeepSeek both have free starter credits).';
+          }
+          if (/invalid.*api.?key|unauthorized|401|api key.*invalid|incorrect api key/.test(msg)) {
+            return 'API key looks wrong. Click "get API key ↗" on the active provider card, generate a fresh key, paste it into the API Key field, then click Test Connection again.';
+          }
+          if (/403|forbidden|permission/.test(msg)) {
+            return 'The provider refused the key (403). Common causes: this key does not have access to that model, the account is suspended, or IP is geo-blocked.';
+          }
+          if (/404|not.?found|unknown model|model.*not.*exist/.test(msg)) {
+            return 'Model name not recognised by the provider. Click a chip under "Main model" to pick a known-good model for this provider.';
+          }
+          if (/timeout|deadline exceeded|i\/o timeout/.test(msg)) {
+            return 'Request timed out — the endpoint is slow or unreachable. Check network / VPN / that the Base URL is correct.';
+          }
+          if (/no such host|dial tcp|connection refused|network|dns/.test(msg)) {
+            return 'Cannot reach the Base URL. Double-check the URL ends with /v1 (or the compatible endpoint expected by the provider), and that your network allows outbound HTTPS.';
+          }
+          if (/context deadline|canceled/.test(msg)) {
+            return 'Request was canceled before it finished. Retry or raise MNEMOSYNE timeouts.';
+          }
+          if (/unmarshal|parse|invalid json/.test(msg)) {
+            return 'Got a response that is not OpenAI-compatible. Make sure the provider supports the chat/completions schema.';
+          }
+          return '';
+        }
+
+        function diagnoseTools(detail) {
+          var msg = String(detail || '').toLowerCase();
+          if (/plain text|without calling the tool|replied without/.test(msg)) {
+            return 'This model does not emit tool_calls — AgentOS skills and the chat agent loop will fall back to plain replies. Switch to a model that supports tool_calls, for example Qwen/Qwen2.5-7B-Instruct or deepseek-chat.';
+          }
+          if (/probe failed|400|invalid/.test(msg)) {
+            return 'tool_calls probe errored out. Some OpenAI-compatible gateways do not accept the "tools" field — try a different model or provider.';
+          }
+          return '';
+        }
+
+        function renderTestResult(data) {
+          if (!testResult) return;
+          testResult.style.display = '';
+          if (data.error) {
+            var hint = diagnoseError(data.error);
+            testResult.className = 'test-result err';
+            testResult.innerHTML =
+              '<strong>✗ Connection failed</strong><br>' +
+              '<span class="muted">' + escapeHTML(data.error) + '</span>' +
+              (hint ? '<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(185,28,28,0.08);font-size:12px;line-height:1.45;"><strong>Fix suggestion:</strong> ' + escapeHTML(hint) + '</div>' : '');
+            return;
+          }
+          var toolBadge = '';
+          if (data.tool_calls_checked) {
+            if (data.tool_calls_supported) {
+              toolBadge = '<span class="pill">tool_calls ✓</span>';
+            } else {
+              toolBadge = '<span class="pill warn">tool_calls ✗</span>';
+            }
+          }
+          var toolHint = '';
+          if (data.tool_calls_checked && !data.tool_calls_supported) {
+            var t = diagnoseTools(data.tool_calls_detail);
+            if (t) {
+              toolHint = '<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(217,119,6,0.1);font-size:12px;line-height:1.45;"><strong>Heads up:</strong> ' + escapeHTML(t) + '</div>';
+            }
+          }
+          testResult.className = 'test-result ok';
+          testResult.innerHTML =
+            '<strong>✓ Connection ok</strong>' +
+            '<div class="row" style="margin-top:6px;">' +
+              '<span class="pill secondary">' + escapeHTML(data.provider || '') + '</span>' +
+              '<span class="pill secondary">' + escapeHTML(data.model || '') + '</span>' +
+              '<span class="pill secondary">' + (data.latency_ms || 0) + ' ms</span>' +
+              toolBadge +
+            '</div>' +
+            (data.reply_preview ? '<div class="muted" style="margin-top:8px;font-size:12px;">reply: ' + escapeHTML(data.reply_preview) + '</div>' : '') +
+            (data.tool_calls_detail ? '<div class="muted" style="margin-top:6px;font-size:12px;">tool_calls probe: ' + escapeHTML(data.tool_calls_detail) + '</div>' : '') +
+            toolHint +
+            '<div class="row" style="margin-top:10px;gap:8px;">' +
+              '<button type="button" id="save-apply-btn">Save &amp; apply</button>' +
+              '<span class="muted" style="font-size:12px;align-self:center;">Writes the current form as the active config.</span>' +
+            '</div>';
+
+          var saveApply = document.getElementById('save-apply-btn');
+          if (saveApply) {
+            saveApply.addEventListener('click', function() {
+              if (!form) return;
+              form.setAttribute('action', '/ui/models');
+              form.submit();
+            });
+          }
+        }
+
+        function escapeHTML(s) {
+          return String(s || '').replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+          });
+        }
+
+        function runTest() {
+          if (!form) return;
+          var fd = new FormData(form);
+          if (testBtn) testBtn.disabled = true;
+          var banner = document.getElementById('retest-banner-btn');
+          if (banner) banner.disabled = true;
+          testResult.style.display = '';
+          testResult.className = 'test-result';
+          testResult.innerHTML = '<span class="muted">Testing connection and probing tool_calls…</span>';
+
+          fetch('/ui/models/test.json', { method: 'POST', body: fd })
+            .then(function(resp) { return resp.json(); })
+            .then(renderTestResult)
+            .catch(function(err) {
+              renderTestResult({ error: 'request failed: ' + (err && err.message ? err.message : err) });
+            })
+            .finally(function() {
+              if (testBtn) testBtn.disabled = false;
+              if (banner) banner.disabled = false;
+            });
+        }
+
+        if (testBtn) {
+          testBtn.addEventListener('click', runTest);
+        }
+        var retestBanner = document.getElementById('retest-banner-btn');
+        if (retestBanner) {
+          retestBanner.addEventListener('click', function() {
+            runTest();
+            var r = document.getElementById('test-result');
+            if (r && r.scrollIntoView) r.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          });
+        }
+
+        var copyBtn = document.getElementById('copy-persist-btn');
+        if (copyBtn) {
+          copyBtn.addEventListener('click', function() {
+            var node = document.getElementById('persist-snippet');
+            if (!node) return;
+            var text = node.textContent || '';
+            var done = function() {
+              var old = copyBtn.textContent;
+              copyBtn.textContent = 'Copied ✓';
+              setTimeout(function() { copyBtn.textContent = old; }, 1500);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done).catch(function() {
+                // fall through to legacy path
+                legacyCopy(text, done);
+              });
+            } else {
+              legacyCopy(text, done);
+            }
+          });
+        }
+
+        function legacyCopy(text, done) {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          document.body.removeChild(ta);
+          if (done) done();
+        }
+      })();
+    </script>
   {{template "footer" .}}
 {{end}}
 

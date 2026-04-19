@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,6 +26,7 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 			{Type: StepTypeConsolidate, CardType: "procedure", PromotedCount: 2, SupersededCount: 1},
 			{Type: StepTypeSendChat, MemoryFeedbackUpdates: 3, ProcedureFeedbackUpdates: 1},
 			{Type: StepTypeRunTask, RetryAttempts: 1, RetrySucceeded: true, ActionReplayed: true},
+			{Type: StepTypeFetchMetrics, Metrics: MetricsSnapshot{TotalTasks: 4, TotalActions: 3, TotalMemoryCards: 5}},
 			{Type: StepTypeScheduleMemory, SchedulerTriggered: true},
 			{Type: StepTypeScheduleMemory, SchedulerSkipReason: "cooldown"},
 			{Type: StepTypeScheduleMemory, SchedulerSkipReason: "candidate_threshold"},
@@ -84,6 +86,12 @@ func TestBuildRollupAggregatesReports(t *testing.T) {
 	}
 	if rollup.ScenarioResults[0].ActionReplays != 1 {
 		t.Fatalf("expected action replay counters to be tracked, got %+v", rollup.ScenarioResults[0])
+	}
+	if rollup.ScenarioResults[0].MetricsSnapshots != 1 ||
+		rollup.ScenarioResults[0].MaxObservedTasks != 4 ||
+		rollup.ScenarioResults[0].MaxObservedActions != 3 ||
+		rollup.ScenarioResults[0].MaxObservedMemoryCards != 5 {
+		t.Fatalf("expected metrics snapshot counters to be tracked, got %+v", rollup.ScenarioResults[0])
 	}
 	if rollup.ScenarioResults[0].SchedulerTriggers != 1 ||
 		rollup.ScenarioResults[0].SchedulerCooldownSkips != 1 ||
@@ -173,11 +181,19 @@ func TestSaveAndCheckBaselineWithTags(t *testing.T) {
 		StartedAt:    time.Now().UTC(),
 		FinishedAt:   time.Now().UTC().Add(5 * time.Millisecond),
 		Passed:       true,
+		StepReports: []StepReport{{
+			ID: "run_email",
+		}},
 	}
 	runDir := filepath.Join(runsRoot, "run-1")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	artifactPath := filepath.Join(runDir, "artifact.txt")
+	if err := os.WriteFile(artifactPath, []byte("artifact body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report.StepReports[0].ArtifactPaths = []string{artifactPath}
 	if err := writeJSON(filepath.Join(runDir, "report.json"), report); err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +204,23 @@ func TestSaveAndCheckBaselineWithTags(t *testing.T) {
 	}
 	if len(written) != 1 {
 		t.Fatalf("expected one baseline file, got %d", len(written))
+	}
+	rawBaseline, err := os.ReadFile(written[0])
+	if err != nil {
+		t.Fatalf("ReadFile baseline: %v", err)
+	}
+	if strings.Contains(string(rawBaseline), baselineRoot) {
+		t.Fatalf("baseline report should not embed absolute baseline paths: %s", rawBaseline)
+	}
+	baselineReport, _, err := LoadRunReport(written[0])
+	if err != nil {
+		t.Fatalf("LoadRunReport returned error: %v", err)
+	}
+	if len(baselineReport.StepReports) != 1 || len(baselineReport.StepReports[0].ArtifactPaths) != 1 {
+		t.Fatalf("expected baseline artifact snapshot, got %+v", baselineReport.StepReports)
+	}
+	if _, err := os.Stat(baselineReport.StepReports[0].ArtifactPaths[0]); err != nil {
+		t.Fatalf("expected baseline artifact copy to exist: %v", err)
 	}
 
 	result, err := CheckBaselineWithTags(runsRoot, baselineRoot, []string{"email"})

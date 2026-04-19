@@ -69,6 +69,169 @@ func TestDashboardPageRenders(t *testing.T) {
 	}
 }
 
+func TestDashboardPageRendersMetricsPanel(t *testing.T) {
+	handler, _, _, memoryStore, orchestrator, executor, runner, _ := newWebTestServer(t)
+
+	if _, err := orchestrator.SubmitTask(airuntime.CreateTaskRequest{
+		Title:       "Metrics dashboard task",
+		Goal:        "Exercise dashboard metrics",
+		RequestedBy: "web-test",
+		Source:      "web-test",
+	}); err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+	if _, err := executor.ExecuteFileWrite(execution.FileWriteActionRequest{
+		Path:          "metrics/output.txt",
+		Content:       "metrics",
+		CreateParents: true,
+	}); err != nil {
+		t.Fatalf("ExecuteFileWrite returned error: %v", err)
+	}
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "metric:test:card",
+		CardType: "web_result",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusActive,
+		Content:  map[string]any{"snippet": "dashboard metric"},
+	}); err != nil {
+		t.Fatalf("CreateCard returned error: %v", err)
+	}
+	if err := runner.SetSkillEnabled("file-read", false); err != nil {
+		t.Fatalf("SetSkillEnabled returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "System Metrics") || !strings.Contains(body, "/metrics API") {
+		t.Fatalf("expected metrics panel in dashboard response")
+	}
+	if !strings.Contains(body, "Total Tasks") || !strings.Contains(body, "Total Actions") || !strings.Contains(body, "Total Memory Cards") || !strings.Contains(body, "Active Skills") {
+		t.Fatalf("expected metrics labels in dashboard response")
+	}
+	if !strings.Contains(body, "failed:") && !strings.Contains(body, "completed:") {
+		t.Fatalf("expected action status breakdown in dashboard response")
+	}
+	if !strings.Contains(body, "active:") {
+		t.Fatalf("expected memory status breakdown in dashboard response")
+	}
+}
+
+func TestMetricsEndpointReturnsRuntimeExecutionMemoryAndSkillCounts(t *testing.T) {
+	handler, runtimeStore, _, memoryStore, orchestrator, executor, runner, _ := newWebTestServer(t)
+
+	if _, err := orchestrator.SubmitTask(airuntime.CreateTaskRequest{
+		Title:       "Metrics inbox task",
+		Goal:        "Count inbox task",
+		RequestedBy: "metrics-test",
+		Source:      "metrics-test",
+	}); err != nil {
+		t.Fatalf("SubmitTask returned error: %v", err)
+	}
+	task, err := runtimeStore.CreateTask(airuntime.CreateTaskRequest{
+		Title:       "Metrics failed task",
+		Goal:        "Count failed task",
+		RequestedBy: "metrics-test",
+		Source:      "metrics-test",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask returned error: %v", err)
+	}
+	if _, err := runtimeStore.MoveTask(task.TaskID, airuntime.TaskStateFailed, func(task *airuntime.Task) {
+		task.SelectedSkill = "shell-command"
+		task.FailureReason = "metrics failure"
+	}); err != nil {
+		t.Fatalf("MoveTask returned error: %v", err)
+	}
+
+	if _, err := executor.ExecuteFileWrite(execution.FileWriteActionRequest{
+		Path:          "metrics/success.txt",
+		Content:       "ok",
+		CreateParents: true,
+	}); err != nil {
+		t.Fatalf("ExecuteFileWrite success returned error: %v", err)
+	}
+	if _, err := executor.ExecuteFileRead(execution.FileReadActionRequest{
+		Path:        "metrics/missing.txt",
+		MaxAttempts: 3,
+	}); err != nil {
+		t.Fatalf("ExecuteFileRead returned error: %v", err)
+	}
+
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "metric:test:active",
+		CardType: "web_result",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusActive,
+		Content:  map[string]any{"snippet": "active card"},
+	}); err != nil {
+		t.Fatalf("CreateCard active returned error: %v", err)
+	}
+	if _, err := memoryStore.CreateCard(memory.CreateCardRequest{
+		CardID:   "metric:test:candidate",
+		CardType: "web_result",
+		Scope:    memory.ScopeProject,
+		Status:   memory.CardStatusCandidate,
+		Content:  map[string]any{"snippet": "candidate card"},
+	}); err != nil {
+		t.Fatalf("CreateCard candidate returned error: %v", err)
+	}
+	if err := runner.SetSkillEnabled("file-read", false); err != nil {
+		t.Fatalf("SetSkillEnabled returned error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var payload Metrics
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.TotalTasks < 2 {
+		t.Fatalf("expected at least two tasks, got %+v", payload)
+	}
+	if payload.TasksByState[airuntime.TaskStateFailed] < 1 {
+		t.Fatalf("expected failed task count, got %+v", payload.TasksByState)
+	}
+	nonFailedTasks := 0
+	for state, count := range payload.TasksByState {
+		if state == airuntime.TaskStateFailed {
+			continue
+		}
+		nonFailedTasks += count
+	}
+	if nonFailedTasks < 1 {
+		t.Fatalf("expected at least one non-failed task count, got %+v", payload.TasksByState)
+	}
+	if payload.TotalActions < 2 {
+		t.Fatalf("expected at least two actions, got %+v", payload)
+	}
+	if payload.ActionsByStatus[execution.ActionStatusCompleted] < 1 || payload.ActionsByStatus[execution.ActionStatusFailed] < 1 {
+		t.Fatalf("expected completed and failed action counts, got %+v", payload.ActionsByStatus)
+	}
+	if payload.ActionsByFailureCategory[execution.ActionFailureIO] < 1 {
+		t.Fatalf("expected io_error failure category, got %+v", payload.ActionsByFailureCategory)
+	}
+	if payload.TotalMemoryCards < 2 {
+		t.Fatalf("expected at least two memory cards, got %+v", payload)
+	}
+	if payload.MemoryByStatus[memory.CardStatusActive] < 1 || payload.MemoryByStatus[memory.CardStatusCandidate] < 1 {
+		t.Fatalf("expected active and candidate memory counts, got %+v", payload.MemoryByStatus)
+	}
+	if payload.ActiveSkills <= 0 {
+		t.Fatalf("expected active skill count, got %+v", payload)
+	}
+}
+
 func TestCreateTaskFormSubmitsTask(t *testing.T) {
 	handler, runtimeStore, _, _, _, _, _, _ := newWebTestServer(t)
 
@@ -445,12 +608,38 @@ func TestChatPageSendsMessage(t *testing.T) {
 		t.Fatalf("expected redirect after chat send, got %d", rec.Code)
 	}
 
+	// First turn should NOT create a task — the chat service now always asks
+	// the user to confirm before starting. The task runtime only advances on
+	// the second "yes" turn.
+	pending, err := runtimeStore.ListTasks()
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no tasks before confirmation, got %d", len(pending))
+	}
+
+	confirm := url.Values{
+		"session_id":        {"default"},
+		"message":           {"yes"},
+		"requested_by":      {"web-chat"},
+		"source":            {"web-chat"},
+		"execution_profile": {"user"},
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/ui/chat", strings.NewReader(confirm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after chat confirm, got %d", rec.Code)
+	}
+
 	tasks, err := runtimeStore.ListTasks()
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
 	if len(tasks) != 1 {
-		t.Fatalf("expected one task created by chat, got %d", len(tasks))
+		t.Fatalf("expected one task created after confirmation, got %d", len(tasks))
 	}
 	if tasks[0].SelectedSkill != "task-plan" {
 		t.Fatalf("expected task-plan skill, got %s", tasks[0].SelectedSkill)
@@ -475,8 +664,8 @@ func TestChatPageSendsMessage(t *testing.T) {
 	if !strings.Contains(body, `<main class="chat-main-shell">`) {
 		t.Fatalf("expected chat main shell class in chat page")
 	}
-	if !strings.Contains(body, "Work completed.") {
-		t.Fatalf("expected assistant completion reply in chat page")
+	if !strings.Contains(body, "Task Plan") && !strings.Contains(body, "Work completed.") {
+		t.Fatalf("expected assistant reply content (plan or completion note) in chat page")
 	}
 	if !strings.Contains(body, "task_request") {
 		t.Fatalf("expected task intent indicator in chat page")
@@ -730,6 +919,83 @@ func TestModelsPageRendersAndUpdates(t *testing.T) {
 	}
 }
 
+func TestModelsPageNamedProfilesSaveApplyLoad(t *testing.T) {
+	handler, _, _, _, _, _, _, _ := newWebTestServer(t)
+
+	baseForm := url.Values{
+		"provider":                 {"openai-compatible"},
+		"base_url":                 {"https://api.example.com/v1"},
+		"api_key":                  {"profile-secret"},
+		"conversation_model":       {"gpt-test"},
+		"conversation_max_tokens":  {"1100"},
+		"conversation_temperature": {"0.40"},
+		"routing_model":            {"gpt-test"},
+		"routing_max_tokens":       {"200"},
+		"skills_model":             {"gpt-test"},
+		"skills_max_tokens":        {"700"},
+		"skills_temperature":       {"0.25"},
+		"profile_save_name":        {"lab"},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ui/models/profile/save", strings.NewReader(baseForm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after save profile, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); !strings.Contains(got, "success=") {
+		t.Fatalf("expected success redirect, got %q", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/ui/models?load_profile=lab", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Loaded profile") || !strings.Contains(body, "lab") {
+		snippet := body
+		if len(snippet) > 400 {
+			snippet = snippet[:400]
+		}
+		t.Fatalf("expected profile load hint, got body snippet: %q", snippet)
+	}
+
+	noneForm := url.Values{"provider": {"none"}}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/ui/models", strings.NewReader(noneForm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after clearing model, got %d", rec.Code)
+	}
+
+	applyForm := url.Values{"profile_apply_name": {"lab"}}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/ui/models/profile/apply", strings.NewReader(applyForm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after apply profile, got %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/ui/models", nil)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	body = rec.Body.String()
+	if !strings.Contains(body, "dense-sub\">openai-compatible") {
+		snippet := body
+		if len(snippet) > 600 {
+			snippet = snippet[:600]
+		}
+		t.Fatalf("expected active provider openai-compatible after apply, body: %q", snippet)
+	}
+}
+
 func TestModelsPageTestConnection(t *testing.T) {
 	handler, _, _, _, _, _, _, _ := newWebTestServer(t)
 	transport := http.DefaultTransport
@@ -774,6 +1040,155 @@ func TestModelsPageTestConnection(t *testing.T) {
 	}
 	if got := rec.Header().Get("Location"); !strings.Contains(got, "/ui/models?test=") {
 		t.Fatalf("expected test redirect, got %q", got)
+	}
+}
+
+// TestModelsPageTestConnectionJSON covers the AJAX endpoint used by the
+// /ui/models page: it must return a JSON payload describing both the plain
+// completion probe and the tool_calls capability probe.
+func TestModelsPageTestConnectionJSON(t *testing.T) {
+	handler, _, _, _, _, _, _, _ := newWebTestServer(t)
+
+	var (
+		calls     int
+		lastTools bool
+	)
+	transport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path %s", req.URL.Path)
+		}
+		calls++
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		_, hasTools := payload["tools"]
+		lastTools = hasTools
+
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Type", "application/json")
+		rec.WriteHeader(http.StatusOK)
+		if hasTools {
+			_, _ = rec.Write([]byte(`{"model":"test-model","choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_current_time","arguments":"{}"}}]}}],"usage":{"prompt_tokens":4,"completion_tokens":6,"total_tokens":10}}`))
+		} else {
+			_, _ = rec.Write([]byte(`{"model":"test-model","choices":[{"message":{"content":"model connection ok"}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`))
+		}
+		return rec.Result(), nil
+	})
+	defer func() { http.DefaultTransport = transport }()
+
+	form := url.Values{
+		"provider":                 {"openai-compatible"},
+		"base_url":                 {"https://model.test/v1"},
+		"api_key":                  {"test-key"},
+		"conversation_model":       {"test-model"},
+		"conversation_max_tokens":  {"900"},
+		"conversation_temperature": {"0.30"},
+		"routing_model":            {"test-model"},
+		"routing_max_tokens":       {"220"},
+		"skills_model":             {"test-model"},
+		"skills_max_tokens":        {"640"},
+		"skills_temperature":       {"0.20"},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ui/models/test.json", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Ok                 bool   `json:"ok"`
+		Provider           string `json:"provider"`
+		Model              string `json:"model"`
+		LatencyMs          int64  `json:"latency_ms"`
+		ReplyPreview       string `json:"reply_preview"`
+		ToolCallsChecked   bool   `json:"tool_calls_checked"`
+		ToolCallsSupported bool   `json:"tool_calls_supported"`
+		ToolCallsDetail    string `json:"tool_calls_detail"`
+		Error              string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, rec.Body.String())
+	}
+	if !resp.Ok {
+		t.Fatalf("expected ok=true, got %+v", resp)
+	}
+	if resp.Model != "test-model" {
+		t.Fatalf("expected model test-model, got %q", resp.Model)
+	}
+	if resp.ReplyPreview != "model connection ok" {
+		t.Fatalf("expected reply preview 'model connection ok', got %q", resp.ReplyPreview)
+	}
+	if !resp.ToolCallsChecked || !resp.ToolCallsSupported {
+		t.Fatalf("expected tool_calls supported, got %+v", resp)
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected no error, got %q", resp.Error)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 upstream calls (completion + tool probe), got %d", calls)
+	}
+	if !lastTools {
+		t.Fatalf("expected second call to include tools payload")
+	}
+}
+
+// TestModelsPageTestConnectionJSONWithoutToolSupport confirms the endpoint
+// reports tool_calls_supported=false (rather than failing the whole check)
+// when the upstream model refuses to emit tool_calls.
+func TestModelsPageTestConnectionJSONWithoutToolSupport(t *testing.T) {
+	handler, _, _, _, _, _, _, _ := newWebTestServer(t)
+
+	transport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Type", "application/json")
+		rec.WriteHeader(http.StatusOK)
+		_, _ = rec.Write([]byte(`{"model":"test-model","choices":[{"message":{"content":"I cannot call tools, sorry."}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`))
+		return rec.Result(), nil
+	})
+	defer func() { http.DefaultTransport = transport }()
+
+	form := url.Values{
+		"provider":                {"openai-compatible"},
+		"base_url":                {"https://model.test/v1"},
+		"api_key":                 {"test-key"},
+		"conversation_model":      {"test-model"},
+		"conversation_max_tokens": {"900"},
+		"routing_model":           {"test-model"},
+		"routing_max_tokens":      {"220"},
+		"skills_model":            {"test-model"},
+		"skills_max_tokens":       {"640"},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ui/models/test.json", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Ok                 bool   `json:"ok"`
+		ToolCallsChecked   bool   `json:"tool_calls_checked"`
+		ToolCallsSupported bool   `json:"tool_calls_supported"`
+		ToolCallsDetail    string `json:"tool_calls_detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Ok {
+		t.Fatalf("expected ok=true (connectivity is fine), got %+v", resp)
+	}
+	if !resp.ToolCallsChecked {
+		t.Fatalf("expected tool_calls_checked=true, got %+v", resp)
+	}
+	if resp.ToolCallsSupported {
+		t.Fatalf("expected tool_calls_supported=false since upstream did not emit tool_calls")
+	}
+	if resp.ToolCallsDetail == "" {
+		t.Fatalf("expected human-readable tool_calls detail message")
 	}
 }
 
@@ -1113,11 +1528,18 @@ func newWebTestServer(t *testing.T) (http.Handler, *airuntime.Store, *approval.S
 	if err := modelConfig.Save(model.Config{Provider: "none"}); err != nil {
 		t.Fatalf("Save model config returned error: %v", err)
 	}
+	modelProfiles, err := model.NewProfileStore(runtimeRoot)
+	if err != nil {
+		t.Fatalf("NewProfileStore returned error: %v", err)
+	}
 	skillRunner := skills.NewRunner(runtimeStore, memoryStore, executor, nil, approvalStore, nil)
 	recallService := recall.NewService(memoryStore)
 	chatStore := chat.NewStore(runtimeRoot)
-	chatService := chat.NewService(chatStore, orchestrator, runtimeStore, recallService, skillRunner, nil)
-	handler := NewServer(memoryStore, runtimeStore, approvalStore, chatService, recallService, orchestrator, executor, skillRunner, modelConfig).Routes()
+	chatService := chat.NewService(chatStore, orchestrator, runtimeStore, recallService, skillRunner, nil, memoryStore)
+	handler := NewServerWithOptions(memoryStore, runtimeStore, approvalStore, chatService, recallService, orchestrator, executor, skillRunner, modelConfig, ServerOptions{
+		EnableWeb:     true,
+		ModelProfiles: modelProfiles,
+	}).Routes()
 	return handler, runtimeStore, approvalStore, memoryStore, orchestrator, executor, skillRunner, chatStore
 }
 

@@ -15,6 +15,7 @@ type SessionView struct {
 	LastAssistantAct string
 	WorkingRecallIDs []string
 	WorkingSources   []string
+	FocusPaths       []string
 }
 
 type TaskRef struct {
@@ -181,6 +182,12 @@ func (o *Orchestrator) workingNotes(state SessionView) []string {
 	}
 	if act := strings.TrimSpace(state.LastAssistantAct); act != "" {
 		notes = append(notes, "last assistant act: "+act)
+	}
+	for _, p := range state.FocusPaths {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			notes = append(notes, "focus path: "+p)
+		}
 	}
 	return notes
 }

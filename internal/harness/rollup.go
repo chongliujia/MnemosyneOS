@@ -37,6 +37,10 @@ type ScenarioStats struct {
 	RetryAttempts            int      `json:"retry_attempts,omitempty"`
 	RetrySuccesses           int      `json:"retry_successes,omitempty"`
 	ActionReplays            int      `json:"action_replays,omitempty"`
+	MetricsSnapshots         int      `json:"metrics_snapshots,omitempty"`
+	MaxObservedTasks         int      `json:"max_observed_tasks,omitempty"`
+	MaxObservedActions       int      `json:"max_observed_actions,omitempty"`
+	MaxObservedMemoryCards   int      `json:"max_observed_memory_cards,omitempty"`
 	SchedulerTriggers        int      `json:"scheduler_triggers,omitempty"`
 	SchedulerCooldownSkips   int      `json:"scheduler_cooldown_skips,omitempty"`
 	SchedulerThresholdSkips  int      `json:"scheduler_threshold_skips,omitempty"`
@@ -131,6 +135,18 @@ func BuildRollupWithScope(root string, tags []string, lane string) (Rollup, erro
 			}
 			if step.ActionReplayed {
 				entry.stats.ActionReplays++
+			}
+			if step.Type == StepTypeFetchMetrics {
+				entry.stats.MetricsSnapshots++
+				if step.Metrics.TotalTasks > entry.stats.MaxObservedTasks {
+					entry.stats.MaxObservedTasks = step.Metrics.TotalTasks
+				}
+				if step.Metrics.TotalActions > entry.stats.MaxObservedActions {
+					entry.stats.MaxObservedActions = step.Metrics.TotalActions
+				}
+				if step.Metrics.TotalMemoryCards > entry.stats.MaxObservedMemoryCards {
+					entry.stats.MaxObservedMemoryCards = step.Metrics.TotalMemoryCards
+				}
 			}
 			if step.Type == StepTypeScheduleMemory {
 				if step.SchedulerTriggered {
@@ -235,8 +251,12 @@ func SaveBaselineWithScope(srcRoot, baselineRoot string, tags []string, lane str
 		if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
 			return nil, err
 		}
+		baselineReport, err := snapshotBaselineReport(report, scenarioDir)
+		if err != nil {
+			return nil, err
+		}
 		path := filepath.Join(scenarioDir, "report.json")
-		if err := writeJSON(path, report); err != nil {
+		if err := writeJSON(path, baselineReport); err != nil {
 			return nil, err
 		}
 		written = append(written, path)
@@ -327,6 +347,16 @@ func RenderRollupText(rollup Rollup) string {
 		}
 		if scenario.ActionReplays > 0 {
 			lines = append(lines, fmt.Sprintf("  action_replays=%d", scenario.ActionReplays))
+		}
+		if scenario.MetricsSnapshots > 0 {
+			lines = append(lines,
+				fmt.Sprintf("  metrics_snapshots=%d max_observed_tasks=%d max_observed_actions=%d max_observed_memory_cards=%d",
+					scenario.MetricsSnapshots,
+					scenario.MaxObservedTasks,
+					scenario.MaxObservedActions,
+					scenario.MaxObservedMemoryCards,
+				),
+			)
 		}
 		if scenario.SchedulerTriggers > 0 || scenario.SchedulerCooldownSkips > 0 || scenario.SchedulerThresholdSkips > 0 || scenario.SchedulerTypeSkips > 0 || scenario.SchedulerExistingSkips > 0 || scenario.SchedulerBusySkips > 0 {
 			lines = append(lines,
@@ -459,6 +489,65 @@ func SaveRollup(path string, rollup Rollup) error {
 		return err
 	}
 	return writeJSON(path, rollup)
+}
+
+func snapshotBaselineReport(report RunReport, scenarioDir string) (RunReport, error) {
+	cloned := report
+	cloned.StepReports = append([]StepReport(nil), report.StepReports...)
+	for i := range cloned.StepReports {
+		artifacts, err := snapshotStepFiles(scenarioDir, "artifacts", cloned.StepReports[i].ID, cloned.StepReports[i].ArtifactPaths)
+		if err != nil {
+			return RunReport{}, err
+		}
+		observations, err := snapshotStepFiles(scenarioDir, "observations", cloned.StepReports[i].ID, cloned.StepReports[i].ObservationPaths)
+		if err != nil {
+			return RunReport{}, err
+		}
+		cloned.StepReports[i].ArtifactPaths = artifacts
+		cloned.StepReports[i].ObservationPaths = observations
+	}
+	return cloned, nil
+}
+
+func snapshotStepFiles(scenarioDir, kind, stepID string, paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	destRoot := filepath.Join(scenarioDir, kind)
+	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+		return nil, err
+	}
+	slug := slugify(firstNonEmpty(stepID, "step"))
+	out := make([]string, 0, len(paths))
+	for i, src := range paths {
+		info, err := os.Stat(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				out = append(out, src)
+				continue
+			}
+			return nil, err
+		}
+		if info.IsDir() {
+			out = append(out, src)
+			continue
+		}
+		raw, err := os.ReadFile(src)
+		if err != nil {
+			return nil, err
+		}
+		base := filepath.Base(src)
+		dest := filepath.Join(destRoot, fmt.Sprintf("%s-%02d-%s", slug, i, base))
+		if err := os.WriteFile(dest, raw, 0o644); err != nil {
+			return nil, err
+		}
+		if rel, err := filepath.Rel(scenarioDir, dest); err == nil {
+			out = append(out, filepath.ToSlash(rel))
+		} else {
+			out = append(out, dest)
+		}
+	}
+	return out, nil
 }
 
 func reportMatchesTags(report RunReport, tags []string) bool {

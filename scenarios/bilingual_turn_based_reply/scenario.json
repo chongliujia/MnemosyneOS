@@ -1,0 +1,25 @@
+{
+  "name": "bilingual_turn_based_reply",
+  "description": "Ensure the assistant replies in English when the current user turn is English.",
+  "lane": "smoke",
+  "tags": [
+    "chat",
+    "bilingual",
+    "ux"
+  ],
+  "steps": [
+    {
+      "id": "english_turn",
+      "type": "send_chat",
+      "session_id": "default",
+      "message": "hello"
+    }
+  ],
+  "assertions": [
+    {
+      "type": "assistant_contains",
+      "step": "english_turn",
+      "contains": "Hi"
+    }
+  ]
+}

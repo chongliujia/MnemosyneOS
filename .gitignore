@@ -1,11 +1,33 @@
 .DS_Store
 *.log
 .env.local
+runs/
+
+# Local runtime state (keep .gitkeep placeholders and committed fixtures only)
+runtime/actions/*/*.json
+runtime/artifacts/downloads/*
+runtime/artifacts/patches/*
+runtime/artifacts/reports/*
+runtime/artifacts/screenshots/*
+runtime/memory/cards/*.json
+runtime/memory/edges/*.json
+runtime/memory/journal.jsonl
+runtime/model/local*.json
+runtime/model/profiles.json
+runtime/observations/**/*.json
+runtime/sessions/current/*.json
+runtime/sessions/history/*.json
+runtime/sessions/state/*.json
+runtime/sessions/summaries/*.json
+runtime/state/*.json
+runtime/state/browser-sessions/*.json
+runtime/tasks/*/*.json
+!runtime/**/.gitkeep
 
 # Go
 bin/
-mnemosyne-api
-mnemosynectl
+/mnemosyne-api
+/mnemosynectl
 
 # Python
 __pycache__/

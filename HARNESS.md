@@ -143,6 +143,19 @@ Supported fields:
 - `metadata.extract_procedures` (optional)
 - `metadata.min_runs` (optional)
 
+### `fetch_metrics`
+
+Capture a runtime metrics snapshot equivalent to the `/metrics` API.
+
+Recorded fields include:
+- total tasks
+- tasks by state
+- total actions
+- actions by status/failure category
+- total memory cards
+- memory by status
+- active skills
+
 ### `consolidate_memory`
 
 Promote candidate memory into active durable memory without routing through chat.
@@ -499,6 +512,34 @@ Fields:
 
 Assert why a scheduler step skipped instead of enqueueing maintenance.
 
+### `metrics_total_tasks_at_least`
+
+Assert that a `fetch_metrics` step observed at least `min` total tasks.
+
+### `metrics_total_actions_at_least`
+
+Assert that a `fetch_metrics` step observed at least `min` total actions.
+
+### `metrics_total_memory_cards_at_least`
+
+Assert that a `fetch_metrics` step observed at least `min` memory cards.
+
+### `metrics_active_skills_at_least`
+
+Assert that a `fetch_metrics` step observed at least `min` enabled skills.
+
+### `metrics_task_state_at_least`
+
+Assert that a `fetch_metrics` step observed at least `min` tasks for `field=<task_state>`.
+
+### `metrics_action_status_at_least`
+
+Assert that a `fetch_metrics` step observed at least `min` actions for `field=<action_status>`.
+
+### `metrics_memory_status_at_least`
+
+Assert that a `fetch_metrics` step observed at least `min` memory cards for `field=<card_status>`.
+
 Fields:
 
 - `step`
@@ -651,6 +692,12 @@ Rollups now surface scheduler policy behavior as first-class counters:
 - `scheduler_existing_task_skips`
 - `scheduler_runtime_busy_skips`
 
+Metrics-aware scenarios also surface:
+- `metrics_snapshots`
+- `max_observed_tasks`
+- `max_observed_actions`
+- `max_observed_memory_cards`
+
 Save a golden baseline:
 
 ```bash
@@ -666,6 +713,19 @@ go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -tags email
 go run ./cmd/mnemosyne-harness -check-baseline ./runs -baseline-dir ./baselines/harness -lane regression
 ```
+
+CI-gated discipline:
+
+```bash
+./scripts/ci-harness.sh smoke
+./scripts/ci-harness.sh regression
+./scripts/refresh-harness-baselines.sh
+make ci
+```
+
+- `scripts/ci-harness.sh` runs a lane, writes `rollup-<lane>.json`, and fails if baseline drift is detected.
+- `scripts/refresh-harness-baselines.sh` is the only intended path for bulk baseline refresh.
+- `.github/workflows/ci.yml` gates pull requests on Go tests plus `smoke` and `regression` harness lanes.
 
 ## Design Notes
 

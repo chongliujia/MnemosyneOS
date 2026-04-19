@@ -51,8 +51,20 @@ func (s *Server) registerWebRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/models", s.handleWebModels)
 	mux.HandleFunc("POST /ui/models", s.handleWebUpdateModels)
 	mux.HandleFunc("POST /ui/models/test", s.handleWebTestModels)
+	mux.HandleFunc("POST /ui/models/test.json", s.handleWebTestModelsJSON)
+	mux.HandleFunc("POST /ui/models/profile/save", s.handleWebSaveModelProfile)
+	mux.HandleFunc("POST /ui/models/profile/apply", s.handleWebApplyModelProfile)
+	mux.HandleFunc("POST /ui/models/profile/delete", s.handleWebDeleteModelProfile)
 	mux.HandleFunc("GET /ui/preview", s.handleWebPreview)
 	mux.HandleFunc("GET /ui/artifacts/view", s.handleWebArtifactView)
+}
+
+func (s *Server) isModelUnconfigured() bool {
+	if s.modelConfig == nil {
+		return true
+	}
+	cfg := s.modelConfig.Get()
+	return cfg.Provider == "" || cfg.Provider == "none"
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
@@ -104,43 +116,174 @@ func (s *Server) handleDashboard(w http.ResponseWriter, _ *http.Request) {
 		latestAction = &actions[0]
 	}
 
+	metrics := Metrics{
+		TasksByState:             make(map[string]int),
+		ActionsByStatus:          make(map[string]int),
+		ActionsByFailureCategory: make(map[string]int),
+		MemoryByStatus:           make(map[string]int),
+	}
+	metrics.TotalTasks = len(tasks)
+	for _, t := range tasks {
+		metrics.TasksByState[t.State]++
+	}
+	if allActions, err := s.executor.ListActions(1000); err == nil {
+		metrics.TotalActions = len(allActions)
+		for _, a := range allActions {
+			metrics.ActionsByStatus[a.Status]++
+			if a.FailureCategory != "" {
+				metrics.ActionsByFailureCategory[a.FailureCategory]++
+			}
+		}
+	}
+	if s.store != nil {
+		resp := s.store.Query(memory.QueryRequest{})
+		metrics.TotalMemoryCards = len(resp.Cards)
+		for _, c := range resp.Cards {
+			metrics.MemoryByStatus[c.Status]++
+		}
+	}
+	if s.skillRunner != nil {
+		for _, sk := range s.skillRunner.ListSkills() {
+			if sk.Enabled {
+				metrics.ActiveSkills++
+			}
+		}
+	}
+
 	data := dashboardPageData{
 		PageData: PageData{
 			Title: "Dashboard",
 			Nav:   navItems("dashboard"),
 		},
-		Runtime:         state,
-		Tasks:           truncateTasks(tasks, 8),
-		Approvals:       approvals,
-		Actions:         actions,
-		Summary:         summarizeDashboard(tasks, approvals, actions),
-		ActiveTask:      activeTask,
-		PendingApproval: pendingApproval,
-		LatestAction:    latestAction,
+		Runtime:           state,
+		Tasks:             truncateTasks(tasks, 8),
+		Approvals:         approvals,
+		Actions:           actions,
+		Summary:           summarizeDashboard(tasks, approvals, actions),
+		ActiveTask:        activeTask,
+		PendingApproval:   pendingApproval,
+		LatestAction:      latestAction,
+		Metrics:           metrics,
+		ModelUnconfigured: s.isModelUnconfigured(),
 	}
 	renderTemplate(w, "dashboard", data)
 }
 
 func (s *Server) handleWebModels(w http.ResponseWriter, r *http.Request) {
+	errorMessage := strings.TrimSpace(r.URL.Query().Get("error"))
+	successMessage := strings.TrimSpace(r.URL.Query().Get("success"))
+	testMessage := strings.TrimSpace(r.URL.Query().Get("test"))
+	profileHint := ""
+
 	cfg := model.Config{}
 	if s.modelConfig != nil {
 		cfg = s.modelConfig.Get()
 	}
+	if name := strings.TrimSpace(r.URL.Query().Get("load_profile")); name != "" {
+		if s.modelProfiles == nil {
+			if errorMessage == "" {
+				errorMessage = "named model profiles are not available"
+			}
+		} else if snap, ok := s.modelProfiles.Get(name); ok {
+			cfg = snap
+			profileHint = fmt.Sprintf("Loaded profile %q into the form. Click Save Model Settings to make it the active runtime config.", name)
+		} else if errorMessage == "" {
+			errorMessage = fmt.Sprintf("unknown profile %q", name)
+		}
+	}
 	cfg = defaultModelConfig(cfg)
+
+	profileNames := []string(nil)
+	if s.modelProfiles != nil {
+		profileNames = s.modelProfiles.ListNames()
+	}
+
+	configPath := ""
+	persistsSecrets := false
+	if s.modelConfig != nil {
+		configPath = s.modelConfig.ConfigPath()
+		persistsSecrets = s.modelConfig.PersistsSecrets()
+	}
+
+	providerVal := strings.TrimSpace(strings.ToLower(cfg.Provider))
+	hasKey := strings.TrimSpace(cfg.APIKey) != ""
+	isFirstRun := providerVal == "" || providerVal == "none" || !hasKey
+
+	var lastTestView *modelLastTestView
+	if s.modelLastTests != nil {
+		if lt := s.modelLastTests.Get(); lt != nil {
+			matches := strings.EqualFold(strings.TrimSpace(lt.Provider), providerVal) &&
+				strings.EqualFold(strings.TrimSpace(lt.Model), strings.TrimSpace(cfg.Conversation.Model))
+			lastTestView = &modelLastTestView{
+				Has:                true,
+				Ok:                 lt.Ok,
+				Provider:           lt.Provider,
+				Model:              lt.Model,
+				AtUTC:              lt.AtUTC.Format(time.RFC3339),
+				AgeHuman:           humanizeSince(lt.AtUTC),
+				Matches:            matches,
+				LatencyMs:          lt.LatencyMs,
+				ReplyPreview:       lt.ReplyPreview,
+				ToolCallsChecked:   lt.ToolCallsChecked,
+				ToolCallsSupported: lt.ToolCallsSupported,
+				ToolCallsDetail:    lt.ToolCallsDetail,
+				Error:              lt.Error,
+			}
+		}
+	}
+
+	persistSnippet := ""
+	if !persistsSecrets {
+		persistSnippet = "MNEMOSYNE_MODEL_CONFIG_PATH=./runtime/model/local.config.json"
+	}
+
 	data := modelSettingsPageData{
 		PageData: PageData{
 			Title: "Models",
 			Nav:   navItems("models"),
 		},
-		Config:         cfg,
-		Providers:      []string{"none", "deepseek", "siliconflow", "openai", "openai-compatible"},
-		HasAPIKey:      strings.TrimSpace(cfg.APIKey) != "",
-		MaskedAPIKey:   maskSecret(cfg.APIKey),
-		SuccessMessage: strings.TrimSpace(r.URL.Query().Get("success")),
-		TestMessage:    strings.TrimSpace(r.URL.Query().Get("test")),
-		ErrorMessage:   strings.TrimSpace(r.URL.Query().Get("error")),
+		Config:          cfg,
+		Providers:       []string{"none", "openai-compatible", "deepseek", "siliconflow", "openai"},
+		Presets:         modelProviderPresets(),
+		HasAPIKey:       hasKey,
+		MaskedAPIKey:    maskSecret(cfg.APIKey),
+		SuccessMessage:  successMessage,
+		TestMessage:     testMessage,
+		ErrorMessage:    errorMessage,
+		ProfileHint:     profileHint,
+		ProfileNames:    profileNames,
+		ProfilesEnabled: s.modelProfiles != nil,
+		FormID:          "model-settings-form",
+		ConfigPath:      configPath,
+		PersistsSecrets: persistsSecrets,
+		IsFirstRun:      isFirstRun,
+		LastTest:        lastTestView,
+		PersistSnippet:  persistSnippet,
 	}
 	renderTemplate(w, "models", data)
+}
+
+// humanizeSince returns a compact "3m ago" / "2h ago" / "5d ago" string used
+// by the models status banner. Anything in the future or within 10s is
+// treated as "just now".
+func humanizeSince(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	if d < 10*time.Second {
+		return "just now"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
 func (s *Server) handleWebUpdateModels(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +336,80 @@ func (s *Server) handleWebTestModels(w http.ResponseWriter, r *http.Request) {
 	}
 	message := fmt.Sprintf("model connection ok: %s / %s", resp.Provider, resp.Model)
 	http.Redirect(w, r, "/ui/models?test="+url.QueryEscape(message), http.StatusSeeOther)
+}
+
+func (s *Server) handleWebSaveModelProfile(w http.ResponseWriter, r *http.Request) {
+	if s.modelConfig == nil || s.modelProfiles == nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape("model profiles are not configured"), http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	current := s.modelConfig.Get()
+	cfg, err := modelConfigFromForm(r, current)
+	if err != nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	if cfg.Provider == "none" {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape("cannot save inactive provider (none) as a profile"), http.StatusSeeOther)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("profile_save_name"))
+	if err := s.modelProfiles.Save(name, cfg); err != nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/ui/models?success="+url.QueryEscape("saved profile "+name), http.StatusSeeOther)
+}
+
+func (s *Server) handleWebApplyModelProfile(w http.ResponseWriter, r *http.Request) {
+	if s.modelConfig == nil || s.modelProfiles == nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape("model profiles are not configured"), http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("profile_apply_name"))
+	if name == "" {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape("select a profile to apply"), http.StatusSeeOther)
+		return
+	}
+	cfg, ok := s.modelProfiles.Get(name)
+	if !ok {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape("unknown profile"), http.StatusSeeOther)
+		return
+	}
+	if err := s.modelConfig.Save(cfg); err != nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/ui/models?success="+url.QueryEscape("applied profile "+name), http.StatusSeeOther)
+}
+
+func (s *Server) handleWebDeleteModelProfile(w http.ResponseWriter, r *http.Request) {
+	if s.modelProfiles == nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape("model profiles are not configured"), http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("profile_delete_name"))
+	if name == "" {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape("select a profile to delete"), http.StatusSeeOther)
+		return
+	}
+	if err := s.modelProfiles.Delete(name); err != nil {
+		http.Redirect(w, r, "/ui/models?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/ui/models?success="+url.QueryEscape("deleted profile "+name), http.StatusSeeOther)
 }
 
 func (s *Server) activeChatSession(r *http.Request) string {
@@ -248,13 +465,14 @@ func (s *Server) handleWebChat(w http.ResponseWriter, r *http.Request) {
 			BodyClass: "chat-body",
 			MainClass: "chat-main-shell",
 		},
-		Sessions:        sessions,
-		Archived:        archived,
-		ActiveSessionID: sessionID,
-		ActiveTitle:     activeTitle,
-		SessionState:    sessionState,
-		Error:           strings.TrimSpace(r.URL.Query().Get("error")),
-		Messages:        messages,
+		Sessions:          sessions,
+		Archived:          archived,
+		ActiveSessionID:   sessionID,
+		ActiveTitle:       activeTitle,
+		SessionState:      sessionState,
+		Error:             strings.TrimSpace(r.URL.Query().Get("error")),
+		Messages:          messages,
+		ModelUnconfigured: s.isModelUnconfigured(),
 		Form: chatFormData{
 			SessionID:   sessionID,
 			RequestedBy: "web-chat",
@@ -616,7 +834,7 @@ func canEmitChatDelta(prev, current chat.Message) bool {
 
 func isPendingChatStage(stage string) bool {
 	switch strings.TrimSpace(stage) {
-	case "routing", "queued", "running", "working", "searching", "planning", "reading", "writing", "executing", "triaging_email", "searching_github", "consolidating", "summarizing", "persisting", "writing_memory":
+	case "routing", "queued", "running", "working", "searching", "planning", "reading", "writing", "executing", "triaging_email", "searching_github", "consolidating", "summarizing", "persisting", "writing_memory", "awaiting_confirmation":
 		return true
 	default:
 		return false
@@ -1156,26 +1374,29 @@ type navItem struct {
 
 type dashboardPageData struct {
 	PageData
-	Runtime         airuntime.RuntimeState
-	Tasks           []airuntime.Task
-	Approvals       []approval.Request
-	Actions         []execution.ActionRecord
-	Summary         dashboardSummary
-	ActiveTask      *airuntime.Task
-	PendingApproval *approval.Request
-	LatestAction    *execution.ActionRecord
+	Runtime           airuntime.RuntimeState
+	Tasks             []airuntime.Task
+	Approvals         []approval.Request
+	Actions           []execution.ActionRecord
+	Summary           dashboardSummary
+	ActiveTask        *airuntime.Task
+	PendingApproval   *approval.Request
+	LatestAction      *execution.ActionRecord
+	Metrics           Metrics
+	ModelUnconfigured bool
 }
 
 type chatPageData struct {
 	PageData
-	Sessions        []chat.SessionSummary
-	Archived        []chat.SessionSummary
-	ActiveSessionID string
-	ActiveTitle     string
-	SessionState    chat.SessionState
-	Error           string
-	Messages        []chat.Message
-	Form            chatFormData
+	Sessions          []chat.SessionSummary
+	Archived          []chat.SessionSummary
+	ActiveSessionID   string
+	ActiveTitle       string
+	SessionState      chat.SessionState
+	Error             string
+	Messages          []chat.Message
+	Form              chatFormData
+	ModelUnconfigured bool
 }
 
 type chatMessagesData struct {
@@ -1258,13 +1479,269 @@ type artifactPageData struct {
 
 type modelSettingsPageData struct {
 	PageData
-	Config         model.Config
-	Providers      []string
-	HasAPIKey      bool
-	MaskedAPIKey   string
-	SuccessMessage string
-	TestMessage    string
-	ErrorMessage   string
+	Config          model.Config
+	Providers       []string
+	Presets         []modelProviderPreset
+	HasAPIKey       bool
+	MaskedAPIKey    string
+	SuccessMessage  string
+	TestMessage     string
+	ErrorMessage    string
+	ProfileHint     string
+	ProfileNames    []string
+	ProfilesEnabled bool
+	FormID          string
+	ConfigPath      string
+	PersistsSecrets bool
+	IsFirstRun      bool
+	LastTest        *modelLastTestView
+	PersistSnippet  string
+}
+
+// modelLastTestView is the render-facing slice of model.LastTestResult. The
+// UI reads it to render the top status banner (green/yellow/red).
+type modelLastTestView struct {
+	Has                bool
+	Ok                 bool
+	Provider           string
+	Model              string
+	AtUTC              string
+	AgeHuman           string
+	Matches            bool
+	LatencyMs          int64
+	ReplyPreview       string
+	ToolCallsChecked   bool
+	ToolCallsSupported bool
+	ToolCallsDetail    string
+	Error              string
+}
+
+// modelProviderPreset drives the provider-card UI on /ui/models. These are
+// static presets (not persisted): the template uses them to fill in sensible
+// defaults the moment a user clicks a provider, so they only have to paste
+// the API key and save.
+type modelProviderPreset struct {
+	ID               string
+	Label            string
+	Tagline          string
+	BaseURL          string
+	DefaultModel     string
+	RecommendedModel string
+	SuggestedModels  []string
+	APIKeyURL        string
+	DocsURL          string
+	Notes            string
+	SupportsTools    bool
+}
+
+func modelProviderPresets() []modelProviderPreset {
+	return []modelProviderPreset{
+		{
+			ID:               "siliconflow",
+			Label:            "SiliconFlow (硅基流动)",
+			Tagline:          "Qwen / DeepSeek 托管，注册送额度，国内直连，支持 tool_calls",
+			BaseURL:          "https://api.siliconflow.cn/v1",
+			DefaultModel:     "Qwen/Qwen2.5-7B-Instruct",
+			RecommendedModel: "Qwen/Qwen2.5-7B-Instruct",
+			SuggestedModels: []string{
+				"Qwen/Qwen2.5-7B-Instruct",
+				"Qwen/Qwen2.5-72B-Instruct",
+				"deepseek-ai/DeepSeek-V3",
+				"deepseek-ai/DeepSeek-V2.5",
+			},
+			APIKeyURL:     "https://cloud.siliconflow.cn/account/ak",
+			DocsURL:       "https://docs.siliconflow.cn/docs/getting-started",
+			Notes:         "推荐新用户优先试 Qwen2.5-7B-Instruct（便宜快，够跑 AgentOS 的 tool_calls）。",
+			SupportsTools: true,
+		},
+		{
+			ID:               "deepseek",
+			Label:            "DeepSeek",
+			Tagline:          "官方 API，价格低、响应稳定，支持 tool_calls",
+			BaseURL:          "https://api.deepseek.com",
+			DefaultModel:     "deepseek-chat",
+			RecommendedModel: "deepseek-chat",
+			SuggestedModels: []string{
+				"deepseek-chat",
+				"deepseek-reasoner",
+			},
+			APIKeyURL:     "https://platform.deepseek.com/api_keys",
+			DocsURL:       "https://api-docs.deepseek.com/",
+			Notes:         "deepseek-chat 是通用对话，deepseek-reasoner 更擅长推理但更贵、不一定支持 tool_calls。",
+			SupportsTools: true,
+		},
+		{
+			ID:               "openai",
+			Label:            "OpenAI",
+			Tagline:          "GPT-4o / GPT-4.1 家族。需要可用额度。",
+			BaseURL:          "https://api.openai.com/v1",
+			DefaultModel:     "gpt-4o-mini",
+			RecommendedModel: "gpt-4o-mini",
+			SuggestedModels: []string{
+				"gpt-4o-mini",
+				"gpt-4.1-mini",
+				"gpt-4o",
+				"gpt-4.1",
+			},
+			APIKeyURL:     "https://platform.openai.com/api-keys",
+			DocsURL:       "https://platform.openai.com/docs/api-reference",
+			Notes:         "项目要求 tool_calls，老的 function_call 形式不支持。gpt-3.5-turbo 不建议使用。",
+			SupportsTools: true,
+		},
+		{
+			ID:               "openai-compatible",
+			Label:            "OpenAI-compatible",
+			Tagline:          "自建 / 第三方网关（one-api、vLLM、Azure、Moonshot、Ollama 的 OpenAI 转换等）",
+			BaseURL:          "",
+			DefaultModel:     "",
+			RecommendedModel: "",
+			SuggestedModels:  nil,
+			APIKeyURL:        "",
+			DocsURL:          "https://platform.openai.com/docs/api-reference/chat",
+			Notes:            "Base URL 必须以 /v1 结尾或直接是 /chat/completions 所在的前缀。上游必须支持 tools / tool_calls 字段。",
+			SupportsTools:    true,
+		},
+	}
+}
+
+// modelTestJSONResponse is the payload returned by POST /ui/models/test.json.
+// The UI reads this to show "connected / latency / tool_calls supported"
+// without a full page reload.
+type modelTestJSONResponse struct {
+	Ok                 bool   `json:"ok"`
+	Provider           string `json:"provider,omitempty"`
+	Model              string `json:"model,omitempty"`
+	LatencyMs          int64  `json:"latency_ms"`
+	ReplyPreview       string `json:"reply_preview,omitempty"`
+	ToolCallsChecked   bool   `json:"tool_calls_checked"`
+	ToolCallsSupported bool   `json:"tool_calls_supported"`
+	ToolCallsLatencyMs int64  `json:"tool_calls_latency_ms,omitempty"`
+	ToolCallsDetail    string `json:"tool_calls_detail,omitempty"`
+	Error              string `json:"error,omitempty"`
+}
+
+func (s *Server) handleWebTestModelsJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writeJSON := func(status int, resp modelTestJSONResponse) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+
+	if s.modelConfig == nil {
+		writeJSON(http.StatusNotImplemented, modelTestJSONResponse{Error: "model config is not configured"})
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		writeJSON(http.StatusBadRequest, modelTestJSONResponse{Error: err.Error()})
+		return
+	}
+	cfg, err := modelConfigFromForm(r, s.modelConfig.Get())
+	if err != nil {
+		writeJSON(http.StatusBadRequest, modelTestJSONResponse{Error: err.Error()})
+		return
+	}
+	gateway, ok := model.NewRuntimeGateway(nil).(*model.RuntimeGateway)
+	if !ok {
+		writeJSON(http.StatusInternalServerError, modelTestJSONResponse{Error: "model test gateway is unavailable"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+
+	resp, err := gateway.TestConfig(ctx, cfg)
+	if err != nil {
+		failure := modelTestJSONResponse{Error: err.Error()}
+		s.recordLastTest(cfg, failure)
+		writeJSON(http.StatusOK, failure)
+		return
+	}
+
+	out := modelTestJSONResponse{
+		Ok:           true,
+		Provider:     resp.Provider,
+		Model:        resp.Model,
+		LatencyMs:    resp.LatencyMillis,
+		ReplyPreview: truncateForDisplay(resp.Text, 240),
+	}
+
+	// Probe tool_calls. We don't fail the overall test if tools aren't
+	// supported; we just surface the fact in the UI.
+	toolResp, toolErr := gateway.TestToolCalls(ctx, cfg)
+	out.ToolCallsChecked = true
+	switch {
+	case toolErr != nil:
+		out.ToolCallsSupported = false
+		out.ToolCallsDetail = "tool_calls probe failed: " + truncateForDisplay(toolErr.Error(), 200)
+	case len(toolResp.ToolCalls) > 0:
+		out.ToolCallsSupported = true
+		out.ToolCallsLatencyMs = toolResp.LatencyMillis
+		name := ""
+		if len(toolResp.ToolCalls) > 0 {
+			name = toolResp.ToolCalls[0].Function.Name
+		}
+		if name == "" {
+			name = "function"
+		}
+		out.ToolCallsDetail = "model emitted tool_call → " + name
+	default:
+		out.ToolCallsSupported = false
+		out.ToolCallsLatencyMs = toolResp.LatencyMillis
+		preview := truncateForDisplay(toolResp.Text, 160)
+		if preview == "" {
+			out.ToolCallsDetail = "model replied without calling the tool"
+		} else {
+			out.ToolCallsDetail = "model replied in plain text instead of calling the tool: " + preview
+		}
+	}
+	s.recordLastTest(cfg, out)
+	writeJSON(http.StatusOK, out)
+}
+
+// recordLastTest persists the outcome of a /ui/models/test.json round trip so
+// that the /ui/models status banner can show the most recent result across
+// daemon restarts. The tested config (not the currently-saved active config)
+// wins: the banner shows what was probed, even if the user hasn't clicked
+// Save yet.
+func (s *Server) recordLastTest(cfg model.Config, resp modelTestJSONResponse) {
+	if s == nil || s.modelLastTests == nil {
+		return
+	}
+	provider := strings.TrimSpace(resp.Provider)
+	if provider == "" {
+		provider = strings.TrimSpace(cfg.Provider)
+	}
+	modelName := strings.TrimSpace(resp.Model)
+	if modelName == "" {
+		modelName = strings.TrimSpace(cfg.Conversation.Model)
+	}
+	res := model.LastTestResult{
+		Provider:           provider,
+		Model:              modelName,
+		Ok:                 resp.Ok,
+		LatencyMs:          resp.LatencyMs,
+		ReplyPreview:       resp.ReplyPreview,
+		ToolCallsChecked:   resp.ToolCallsChecked,
+		ToolCallsSupported: resp.ToolCallsSupported,
+		ToolCallsLatencyMs: resp.ToolCallsLatencyMs,
+		ToolCallsDetail:    resp.ToolCallsDetail,
+		Error:              resp.Error,
+	}
+	_ = s.modelLastTests.Save(res)
+}
+
+func truncateForDisplay(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 3 {
+		if len(s) <= max {
+			return s
+		}
+		return s[:max]
+	}
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
 }
 
 type taskFormData struct {
@@ -1797,13 +2274,17 @@ func renderChatContentHTML(role, content string) template.HTML {
 		return ""
 	}
 	if role == "user" {
-		return template.HTML("<p>" + linkifyEscaped(strings.ReplaceAll(template.HTMLEscapeString(content), "\n", "<br>")) + "</p>")
+		return template.HTML("<p>" + renderInlineMarkdown(template.HTMLEscapeString(content)) + "</p>")
 	}
 	lines := strings.Split(content, "\n")
 	var out strings.Builder
 	inUL := false
 	inOL := false
 	inPara := false
+	inCode := false
+	var codeLang string
+	var codeLines []string
+
 	closeBlocks := func() {
 		if inPara {
 			out.WriteString("</p>")
@@ -1819,9 +2300,58 @@ func renderChatContentHTML(role, content string) template.HTML {
 		}
 	}
 	for _, raw := range lines {
+		if inCode {
+			if strings.TrimSpace(raw) == "```" {
+				langAttr := ""
+				if codeLang != "" {
+					langAttr = ` data-lang="` + template.HTMLEscapeString(codeLang) + `"`
+				}
+				out.WriteString("<pre" + langAttr + "><code>")
+				out.WriteString(template.HTMLEscapeString(strings.Join(codeLines, "\n")))
+				out.WriteString("</code></pre>")
+				inCode = false
+				codeLang = ""
+				codeLines = nil
+				continue
+			}
+			codeLines = append(codeLines, raw)
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(raw), "```") {
+			closeBlocks()
+			inCode = true
+			codeLang = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "```"))
+			codeLines = nil
+			continue
+		}
 		line := strings.TrimSpace(raw)
 		if line == "" {
 			closeBlocks()
+			continue
+		}
+		if line == "---" || line == "***" || line == "___" {
+			closeBlocks()
+			out.WriteString("<hr>")
+			continue
+		}
+		if strings.HasPrefix(line, "### ") {
+			closeBlocks()
+			out.WriteString("<h3>" + renderInlineMarkdown(template.HTMLEscapeString(strings.TrimPrefix(line, "### "))) + "</h3>")
+			continue
+		}
+		if strings.HasPrefix(line, "## ") {
+			closeBlocks()
+			out.WriteString("<h2>" + renderInlineMarkdown(template.HTMLEscapeString(strings.TrimPrefix(line, "## "))) + "</h2>")
+			continue
+		}
+		if strings.HasPrefix(line, "# ") {
+			closeBlocks()
+			out.WriteString("<h1>" + renderInlineMarkdown(template.HTMLEscapeString(strings.TrimPrefix(line, "# "))) + "</h1>")
+			continue
+		}
+		if strings.HasPrefix(line, "> ") {
+			closeBlocks()
+			out.WriteString("<blockquote>" + renderInlineMarkdown(template.HTMLEscapeString(strings.TrimPrefix(line, "> "))) + "</blockquote>")
 			continue
 		}
 		if ordered, item, ok := parseListItem(line); ok {
@@ -1838,7 +2368,7 @@ func renderChatContentHTML(role, content string) template.HTML {
 					out.WriteString("<ol>")
 					inOL = true
 				}
-				out.WriteString("<li>" + linkifyEscaped(template.HTMLEscapeString(item)) + "</li>")
+				out.WriteString("<li>" + renderInlineMarkdown(template.HTMLEscapeString(item)) + "</li>")
 			} else {
 				if inOL {
 					out.WriteString("</ol>")
@@ -1848,7 +2378,7 @@ func renderChatContentHTML(role, content string) template.HTML {
 					out.WriteString("<ul>")
 					inUL = true
 				}
-				out.WriteString("<li>" + linkifyEscaped(template.HTMLEscapeString(item)) + "</li>")
+				out.WriteString("<li>" + renderInlineMarkdown(template.HTMLEscapeString(item)) + "</li>")
 			}
 			continue
 		}
@@ -1860,7 +2390,7 @@ func renderChatContentHTML(role, content string) template.HTML {
 			out.WriteString("</ol>")
 			inOL = false
 		}
-		escaped := linkifyEscaped(template.HTMLEscapeString(line))
+		escaped := renderInlineMarkdown(template.HTMLEscapeString(line))
 		if !inPara {
 			out.WriteString("<p>")
 			inPara = true
@@ -1869,8 +2399,25 @@ func renderChatContentHTML(role, content string) template.HTML {
 		}
 		out.WriteString(escaped)
 	}
+	if inCode && len(codeLines) > 0 {
+		out.WriteString("<pre><code>")
+		out.WriteString(template.HTMLEscapeString(strings.Join(codeLines, "\n")))
+		out.WriteString("</code></pre>")
+	}
 	closeBlocks()
 	return template.HTML(out.String())
+}
+
+var (
+	inlineCodePattern = regexp.MustCompile("`([^`]+)`")
+	boldPattern       = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+)
+
+func renderInlineMarkdown(escaped string) string {
+	escaped = inlineCodePattern.ReplaceAllString(escaped, `<code>$1</code>`)
+	escaped = boldPattern.ReplaceAllString(escaped, `<strong>$1</strong>`)
+	escaped = linkifyEscaped(escaped)
+	return strings.ReplaceAll(escaped, "\n", "<br>")
 }
 
 func parseListItem(line string) (ordered bool, item string, ok bool) {
@@ -2002,9 +2549,6 @@ func maskSecret(value string) string {
 
 func defaultModelConfig(cfg model.Config) model.Config {
 	cfg = normalizeProviderPreset(cfg)
-	if cfg.Provider == "none" {
-		cfg.Provider = "deepseek"
-	}
 	if cfg.Conversation.MaxTokens <= 0 {
 		cfg.Conversation.MaxTokens = 1600
 	}
@@ -2101,6 +2645,49 @@ func recallHitTitle(hit recall.Hit) string {
 	return hit.CardType
 }
 
+// formatToolArgs turns a tool-call's JSON argument blob into a compact
+// "key=value, key=value" string for inline display in the tool-use receipt.
+// It drops internal plumbing (_locale) and falls back to the raw text when
+// decoding fails so the UI still shows *something*.
+func formatToolArgs(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return ""
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		if len(raw) > 80 {
+			return raw[:77] + "..."
+		}
+		return raw
+	}
+	keys := make([]string, 0, len(parsed))
+	for key := range parsed {
+		if key == "_locale" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		switch value := parsed[key].(type) {
+		case string:
+			parts = append(parts, fmt.Sprintf("%s=%q", key, value))
+		default:
+			parts = append(parts, fmt.Sprintf("%s=%v", key, value))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	joined := strings.Join(parts, ", ")
+	if len(joined) > 140 {
+		joined = joined[:137] + "..."
+	}
+	return joined
+}
+
 func chatStageLabel(stage string) string {
 	switch strings.TrimSpace(stage) {
 	case "routing":
@@ -2133,6 +2720,8 @@ func chatStageLabel(stage string) string {
 		return "Running"
 	case "awaiting_approval":
 		return "Approval Needed"
+	case "awaiting_confirmation":
+		return "Awaiting Confirmation"
 	case "blocked":
 		return "Blocked"
 	case "failed":
@@ -2159,6 +2748,8 @@ func chatStageClass(stage string) string {
 		return "stage-live"
 	case "awaiting_approval", "blocked":
 		return "stage-alert"
+	case "awaiting_confirmation":
+		return "stage-warn"
 	case "failed":
 		return "stage-danger"
 	case "done", "responded":
@@ -2236,6 +2827,7 @@ var webTemplates = template.Must(template.New("web").Funcs(template.FuncMap{
 	"derefString":           derefString,
 	"previewURL":            previewURL,
 	"recallHitTitle":        recallHitTitle,
+	"formatToolArgs":        formatToolArgs,
 	"chatStageLabel":        chatStageLabel,
 	"chatStageClass":        chatStageClass,
 	"chatStageStatusText":   chatStageStatusText,

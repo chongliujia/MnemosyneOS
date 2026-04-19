@@ -6,6 +6,17 @@ import (
 	"strings"
 )
 
+// LoadDefaultLocalEnv loads KEY=VALUE pairs from the env file used by the CLI
+// and server. If MNEMOSYNE_DOTENV_PATH is set, that file is used; otherwise ".env.local".
+// Variables already present in the process environment are not overwritten.
+func LoadDefaultLocalEnv() error {
+	path := strings.TrimSpace(os.Getenv("MNEMOSYNE_DOTENV_PATH"))
+	if path == "" {
+		path = ".env.local"
+	}
+	return LoadEnvFile(path)
+}
+
 // LoadEnvFile reads simple KEY=VALUE pairs from a local env file if present.
 // Existing environment variables are preserved.
 func LoadEnvFile(path string) error {

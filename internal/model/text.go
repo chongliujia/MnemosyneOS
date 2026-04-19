@@ -24,20 +24,60 @@ type TextRequest struct {
 	MaxTokens    int
 	Temperature  float64
 	Profile      string
+
+	// Function-calling fields (OpenAI-compatible).
+	// When Tools is non-empty the gateway includes them in the API payload.
+	// When Messages is non-empty it replaces the default system+user pair.
+	Tools    []ToolDefinition
+	Messages []ChatMessage
 }
 
 type TextResponse struct {
-	Provider      string `json:"provider"`
-	Model         string `json:"model"`
-	Text          string `json:"text"`
-	InputTokens   int    `json:"input_tokens,omitempty"`
-	OutputTokens  int    `json:"output_tokens,omitempty"`
-	TotalTokens   int    `json:"total_tokens,omitempty"`
-	LatencyMillis int64  `json:"latency_ms,omitempty"`
+	Provider      string     `json:"provider"`
+	Model         string     `json:"model"`
+	Text          string     `json:"text"`
+	ToolCalls     []ToolCall `json:"tool_calls,omitempty"`
+	InputTokens   int        `json:"input_tokens,omitempty"`
+	OutputTokens  int        `json:"output_tokens,omitempty"`
+	TotalTokens   int        `json:"total_tokens,omitempty"`
+	LatencyMillis int64      `json:"latency_ms,omitempty"`
 }
 
 type TextDelta struct {
 	Text string `json:"text"`
+}
+
+// ── Function calling types (OpenAI-compatible) ───────────────────────
+
+type ToolDefinition struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ChatMessage represents a single message in a multi-turn conversation
+// that may include tool calls and tool results.
+type ChatMessage struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type DeepSeekGateway struct {
@@ -66,12 +106,10 @@ func NewTextGatewayFromEnv() TextGateway {
 			modelName = "deepseek-chat"
 		}
 		return &DeepSeekGateway{
-			baseURL: baseURL,
-			apiKey:  apiKey,
-			model:   modelName,
-			httpClient: &http.Client{
-				Timeout: 45 * time.Second,
-			},
+			baseURL:    baseURL,
+			apiKey:     apiKey,
+			model:      modelName,
+			httpClient: newModelHTTPClient(),
 		}
 	default:
 		return nil
